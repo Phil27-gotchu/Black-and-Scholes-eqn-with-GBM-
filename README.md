@@ -141,6 +141,7 @@ static/
   index.html     Terminal shell
   css/terminal.css   Dark/light themes via CSS variables
   js/app.js      SPA router, command parser, Plotly rendering
+archive/         Early Streamlit prototypes — not used at runtime
 ```
 
 The backend is stateless; all market data is cached in-process with short
