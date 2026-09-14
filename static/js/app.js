@@ -203,8 +203,12 @@ for (const [code, label] of Object.entries(FUNCTIONS)) {
   fkeysNav.appendChild(b);
 }
 
-/* clicking any ticker cell navigates to its chart */
+/* clicking: watchlist add/remove buttons, or ticker cells -> chart */
 main.addEventListener("click", (e) => {
+  const add = e.target.closest("[data-wl-add]");
+  if (add) { wlAdd(add.dataset.wlAdd); return; }
+  const rm = e.target.closest("[data-wl-rm]");
+  if (rm) { wlRemove(rm.dataset.wlRm, rm.dataset.t); return; }
   const td = e.target.closest("[data-nav-ticker]");
   if (td) nav("GP", td.dataset.navTicker);
 });
@@ -229,11 +233,15 @@ setInterval(loadTape, 90000);
 
 /* ---------------- shared components ---------------- */
 
-function quoteTable(rows, title, sub = "") {
-  let body = `<table class="q"><tr><th>TICKER</th><th>NAME</th><th>LAST</th><th>CHG</th><th>CHG%</th></tr>`;
+function quoteTable(rows, title, sub = "", section = null) {
+  const rmTh = section ? `<th></th>` : "";
+  const rmTd = (q) => section
+    ? `<td class="rm" title="REMOVE FROM WATCHLIST" data-wl-rm="${esc(section)}" data-t="${esc(q.ticker)}">✕</td>`
+    : "";
+  let body = `<table class="q"><tr><th>TICKER</th><th>NAME</th><th>LAST</th><th>CHG</th><th>CHG%</th>${rmTh}</tr>`;
   for (const q of rows) {
     if (q.last === null) {
-      body += `<tr><td class="tk">${esc(q.ticker)}</td><td class="nm">${esc(q.name)}</td><td>—</td><td>—</td><td>—</td></tr>`;
+      body += `<tr><td class="tk">${esc(q.ticker)}</td><td class="nm">${esc(q.name)}</td><td>—</td><td>—</td><td>—</td>${rmTd(q)}</tr>`;
       continue;
     }
     body += `<tr>
@@ -241,11 +249,63 @@ function quoteTable(rows, title, sub = "") {
       <td class="nm">${esc(q.name)}</td>
       <td class="px">${fmt(q.last)}</td>
       <td class="${chgCls(q.chg)}">${q.chg >= 0 ? "+" : ""}${fmt(q.chg)}</td>
-      <td class="${chgCls(q.chg)}">${q.chg >= 0 ? "+" : ""}${fmt(q.chg_pct)}%</td></tr>`;
+      <td class="${chgCls(q.chg)}">${q.chg >= 0 ? "+" : ""}${fmt(q.chg_pct)}%</td>${rmTd(q)}</tr>`;
   }
   body += `</table>`;
-  return panel(title, body, sub);
+  const subHTML = section
+    ? `<input class="wl-in" id="wl-in-${esc(section)}" maxlength="14"
+         placeholder="${section === "bse" ? "ADD SYMBOL (e.g. TITAN)" : "ADD SYMBOL (e.g. PLTR)"}">
+       <button class="wl-btn" data-wl-add="${esc(section)}">+ ADD</button>`
+    : sub;
+  return panel(title, body, subHTML);
 }
+
+/* --- watchlist add / remove --- */
+
+async function wlPost(action, section, ticker) {
+  const r = await fetch(`/api/watchlist/${action}?section=${encodeURIComponent(section)}` +
+                        `&ticker=${encodeURIComponent(ticker)}`, { method: "POST" });
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`;
+    try { msg = (await r.json()).detail || msg; } catch (_) {}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+
+async function wlAdd(section) {
+  const inp = $(`#wl-in-${section}`);
+  const val = (inp?.value || "").trim();
+  if (!val) return;
+  setStatus(`ADDING ${val.toUpperCase()}…`);
+  try {
+    const res = await wlPost("add", section, val);
+    setStatus(`ADDED ${res.ticker}`);
+    render();
+    loadTape();
+  } catch (e) {
+    setStatus(`ADD FAILED — ${String(e.message).toUpperCase()}`);
+    if (inp) { inp.focus(); inp.select(); }
+  }
+}
+
+async function wlRemove(section, ticker) {
+  setStatus(`REMOVING ${ticker}…`);
+  try {
+    await wlPost("remove", section, ticker);
+    setStatus(`REMOVED ${ticker}`);
+    render();
+    loadTape();
+  } catch (e) {
+    setStatus(`REMOVE FAILED — ${String(e.message).toUpperCase()}`);
+  }
+}
+
+main.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.id && e.target.id.startsWith("wl-in-")) {
+    wlAdd(e.target.id.replace("wl-in-", ""));
+  }
+});
 
 function panel(title, bodyHTML, sub = "", pad = false) {
   return `<div class="panel"><div class="ttl"><span>${title}</span><span class="sub">${sub}</span></div>
@@ -323,7 +383,7 @@ function marketSectionHTML(key, m, focused) {
     </div>
     ${indexCards(m.indices)}
     <div class="grid-2">
-      <div>${quoteTable(m.watchlist, "WATCHLIST", "DAILY CHANGE")}</div>
+      <div>${quoteTable(m.watchlist, "WATCHLIST", "", key)}</div>
       <div>
         ${panel("MOVERS", moversHTML(m.watchlist), "TOP GAINERS | TOP LOSERS")}
         ${panel("BENCHMARK — 6M", `<div class="chart" id="bench-${key}"></div>`)}

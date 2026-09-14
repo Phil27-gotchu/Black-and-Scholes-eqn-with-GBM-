@@ -85,22 +85,42 @@ def api_markets():
             "label": "NASDAQ · NEW YORK",
             "status": market_status("America/New_York", 9 * 60 + 30, 16 * 60),
             "indices": md.get_quotes(tuple(t for t, _ in md.NASDAQ_INDICES)),
-            "watchlist": md.get_quotes(tuple(t for t, _ in md.NASDAQ_WATCHLIST)),
+            "watchlist": md.get_quotes(tuple(md.watchlist_tickers("nasdaq"))),
             "benchmark": "^IXIC",
         },
         "bse": {
             "label": "BSE · MUMBAI",
             "status": market_status("Asia/Kolkata", 9 * 60 + 15, 15 * 60 + 30),
             "indices": md.get_quotes(tuple(t for t, _ in md.BSE_INDICES)),
-            "watchlist": md.get_quotes(tuple(t for t, _ in md.BSE_WATCHLIST)),
+            "watchlist": md.get_quotes(tuple(md.watchlist_tickers("bse"))),
             "benchmark": "^BSESN",
         },
     }
 
 
+@app.post("/api/watchlist/add")
+def api_watchlist_add(section: str, ticker: str):
+    if section not in ("nasdaq", "bse"):
+        raise HTTPException(400, "section must be 'nasdaq' or 'bse'")
+    result = md.add_watchlist_ticker(section, ticker)
+    if not result["ok"]:
+        raise HTTPException(404, result["msg"])
+    return result
+
+
+@app.post("/api/watchlist/remove")
+def api_watchlist_remove(section: str, ticker: str):
+    if section not in ("nasdaq", "bse"):
+        raise HTTPException(400, "section must be 'nasdaq' or 'bse'")
+    result = md.remove_watchlist_ticker(section, ticker)
+    if not result["ok"]:
+        raise HTTPException(404, result["msg"])
+    return result
+
+
 @app.get("/api/tape")
 def api_tape():
-    return md.get_quotes(tuple(md.TAPE_TICKERS))
+    return md.get_quotes(tuple(md.tape_tickers()))
 
 
 @app.get("/api/history")

@@ -6,8 +6,10 @@ Covers two market universes: NASDAQ (US) and BSE (India, '.BO' suffix on Yahoo).
 """
 
 import functools
+import json
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -86,14 +88,116 @@ BSE_WATCHLIST = [
     ("WIPRO.BO", "WIPRO"),
 ]
 
-TAPE_TICKERS = (
-    [t for t, _ in NASDAQ_INDICES]
-    + [t for t, _ in NASDAQ_WATCHLIST[:6]]
-    + [t for t, _ in BSE_INDICES[:2]]
-    + [t for t, _ in BSE_WATCHLIST[:5]]
-)
-
 ALL_NAMES = dict(NASDAQ_INDICES + NASDAQ_WATCHLIST + BSE_INDICES + BSE_WATCHLIST)
+
+
+# ------------------------------------------------------------
+# Customizable watchlists (persisted to watchlists.json)
+# ------------------------------------------------------------
+
+WATCHLIST_FILE = Path(__file__).parent / "watchlists.json"
+_wl_lock = threading.Lock()
+
+DEFAULT_WATCHLISTS = {
+    "nasdaq": [{"ticker": t, "name": n} for t, n in NASDAQ_WATCHLIST],
+    "bse": [{"ticker": t, "name": n} for t, n in BSE_WATCHLIST],
+}
+
+
+def load_watchlists() -> dict:
+    with _wl_lock:
+        if WATCHLIST_FILE.exists():
+            try:
+                data = json.loads(WATCHLIST_FILE.read_text())
+                if all(k in data for k in DEFAULT_WATCHLISTS):
+                    return data
+            except Exception:
+                pass
+        return json.loads(json.dumps(DEFAULT_WATCHLISTS))  # deep copy
+
+
+def _save_watchlists(data: dict):
+    with _wl_lock:
+        WATCHLIST_FILE.write_text(json.dumps(data, indent=2))
+
+
+def watchlist_tickers(section: str) -> list:
+    return [w["ticker"] for w in load_watchlists()[section]]
+
+
+def _watchlist_names() -> dict:
+    wl = load_watchlists()
+    return {w["ticker"]: w["name"] for sec in wl.values() for w in sec}
+
+
+def name_for(ticker: str, custom_names: dict = None) -> str:
+    names = custom_names if custom_names is not None else _watchlist_names()
+    return names.get(ticker) or ALL_NAMES.get(ticker, ticker)
+
+
+def _resolve_symbol(section: str, raw: str):
+    """
+    Validate a symbol against Yahoo; for the BSE section a bare symbol like
+    'RELIANCE' is tried as 'RELIANCE.BO' first. Returns (ticker, name) or
+    (None, error_message).
+    """
+    t = raw.strip().upper()
+    if not t or len(t) > 14:
+        return None, "Invalid symbol."
+    candidates = [t]
+    if section == "bse" and "." not in t and not t.startswith("^"):
+        candidates = [t + ".BO", t]
+    for cand in candidates:
+        try:
+            tk = yf.Ticker(cand)
+            last = tk.fast_info.last_price
+            if last is None or (isinstance(last, float) and np.isnan(last)):
+                continue
+            name = cand
+            try:
+                info = tk.info or {}
+                name = (info.get("shortName") or info.get("longName") or cand)
+            except Exception:
+                pass
+            return cand, str(name).upper()[:24]
+        except Exception:
+            continue
+    return None, f"'{raw.strip().upper()}' not found on Yahoo Finance."
+
+
+def add_watchlist_ticker(section: str, raw: str) -> dict:
+    ticker, name_or_err = _resolve_symbol(section, raw)
+    if ticker is None:
+        return {"ok": False, "msg": name_or_err}
+    data = load_watchlists()
+    if any(w["ticker"] == ticker for w in data[section]):
+        return {"ok": False, "msg": f"{ticker} is already in the watchlist."}
+    if len(data[section]) >= 24:
+        return {"ok": False, "msg": "Watchlist is full (24 symbols max)."}
+    data[section].append({"ticker": ticker, "name": name_or_err})
+    _save_watchlists(data)
+    return {"ok": True, "ticker": ticker, "name": name_or_err}
+
+
+def remove_watchlist_ticker(section: str, ticker: str) -> dict:
+    t = ticker.strip().upper()
+    data = load_watchlists()
+    before = len(data[section])
+    data[section] = [w for w in data[section] if w["ticker"] != t]
+    if len(data[section]) == before:
+        return {"ok": False, "msg": f"{t} is not in the watchlist."}
+    _save_watchlists(data)
+    return {"ok": True, "ticker": t}
+
+
+def tape_tickers() -> list:
+    """Tape follows the current (customized) watchlists."""
+    return (
+        [t for t, _ in NASDAQ_INDICES]
+        + watchlist_tickers("nasdaq")[:6]
+        + [t for t, _ in BSE_INDICES[:2]]
+        + watchlist_tickers("bse")[:5]
+    )
 
 RANGE_MAP = {
     "1D": ("1d", "5m"),
@@ -117,9 +221,10 @@ def get_quotes(tickers: tuple) -> list:
     raw = yf.download(list(tickers), period="5d", interval="1d",
                       progress=False, auto_adjust=True, group_by="ticker",
                       threads=True)
+    custom_names = _watchlist_names()
     rows = []
     for t in tickers:
-        row = dict(ticker=t, name=ALL_NAMES.get(t, t),
+        row = dict(ticker=t, name=name_for(t, custom_names),
                    last=None, chg=None, chg_pct=None)
         try:
             if isinstance(raw.columns, pd.MultiIndex):

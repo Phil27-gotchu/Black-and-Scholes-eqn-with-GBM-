@@ -19,6 +19,12 @@ historical delta-hedge backtester with GARCH volatility forecasting.
   NASDAQ-100, S&P 500, VIX + mega-cap watchlist) and BSE (SENSEX, NIFTY 50,
   USD/INR + large-cap `.BO` watchlist), each with live status, movers, and a
   benchmark chart.
+- **Customizable watchlists** — add or remove symbols per section straight
+  from the UI (`+ ADD` in the watchlist header, `✕` on any row). Symbols are
+  validated against Yahoo before being added; bare symbols in the BSE section
+  get the `.BO` suffix automatically (`TITAN` → `TITAN.BO`). Changes persist
+  server-side in `watchlists.json`, and the movers, relative-performance
+  chart, and ticker tape follow your custom lists.
 - **NDQ / BSE** — focused views per exchange with relative-performance charts
   and headlines.
 - **GP** — candlestick price charts with volume and MA20/MA50, ranges from
@@ -118,6 +124,7 @@ framework dependencies and is directly unit-testable.
 | Endpoint         | Description                                    |
 | ---------------- | ---------------------------------------------- |
 | `/api/markets`   | NASDAQ + BSE indices, watchlists, market state |
+| `/api/watchlist/add`, `/api/watchlist/remove` | Customize section watchlists (POST) |
 | `/api/history`   | OHLCV for any Yahoo symbol, `range=1D…MAX`     |
 | `/api/vol`       | Realized + GARCH volatility series             |
 | `/api/ov`        | Black-Scholes greeks + curves                  |
