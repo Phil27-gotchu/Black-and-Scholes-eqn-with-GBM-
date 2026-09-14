@@ -11,6 +11,34 @@ historical delta-hedge backtester with GARCH volatility forecasting.
 
 ---
 
+## Screenshots
+
+### Market monitor — NASDAQ & BSE sections
+
+![Market monitor, dark theme](shots/markets_dark.png)
+
+### Light theme
+
+![Market monitor, light theme](shots/markets_light.png)
+
+### Price chart — candles, volume, moving averages
+
+![Price chart for RELIANCE.BO](shots/chart_bse.png)
+
+### Volatility monitor — realized vol + GARCH(1,1) forecast
+
+![Volatility monitor for NVDA](shots/volatility.png)
+
+### Historical delta-hedge backtest
+
+![Delta-hedge backtest](shots/backtest.png)
+
+### Customizable watchlists
+
+![Custom watchlist with an added symbol](shots/watchlist_custom.png)
+
+---
+
 ## Features
 
 **Markets**
