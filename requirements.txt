@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+yfinance
+numpy
+pandas
+scipy
+arch
+statsmodels

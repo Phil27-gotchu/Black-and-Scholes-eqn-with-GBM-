@@ -1,0 +1,338 @@
+"""
+B&S TERMINAL — FastAPI backend.
+
+Run with:
+    uvicorn app:app --reload --port 8000
+
+Serves the single-page terminal frontend from /static and a JSON API:
+
+    /api/markets            NASDAQ + BSE sections (indices, watchlists, status)
+    /api/tape               ticker-tape quotes
+    /api/history            OHLCV history for any Yahoo symbol
+    /api/profile            company fundamentals
+    /api/news               headlines
+    /api/vol                realized + GARCH volatility series
+    /api/ov                 Black-Scholes valuation + greek curves
+    /api/gbm                GBM path simulation
+    /api/mc                 Monte Carlo option pricing
+    /api/backtest           historical delta-hedge backtest
+"""
+
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import numpy as np
+import pandas as pd
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+import market_data as md
+import quant
+
+app = FastAPI(title="B&S Terminal API", version="2.0")
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+# ------------------------------------------------------------
+# helpers
+# ------------------------------------------------------------
+
+def jlist(arr):
+    """numpy array -> JSON-safe list (NaN -> None)."""
+    out = []
+    for v in np.asarray(arr, dtype=float):
+        out.append(None if np.isnan(v) else round(float(v), 6))
+    return out
+
+
+def market_status(tz_name, open_hm, close_hm):
+    now = datetime.now(ZoneInfo(tz_name))
+    is_weekday = now.weekday() < 5
+    minutes = now.hour * 60 + now.minute
+    is_open = is_weekday and open_hm <= minutes < close_hm
+    return {
+        "local_time": now.strftime("%H:%M"),
+        "open": is_open,
+        "label": "OPEN" if is_open else "CLOSED",
+    }
+
+
+def hist_payload(df: pd.DataFrame) -> dict:
+    idx = df.index
+    if getattr(idx, "tz", None) is not None:
+        idx = idx.tz_localize(None)
+    return {
+        "t": [ts.isoformat() for ts in idx.to_pydatetime()],
+        "o": jlist(df["Open"].values),
+        "h": jlist(df["High"].values),
+        "l": jlist(df["Low"].values),
+        "c": jlist(df["Close"].values),
+        "v": jlist(df["Volume"].values) if "Volume" in df else [],
+    }
+
+
+# ------------------------------------------------------------
+# market data endpoints
+# ------------------------------------------------------------
+
+@app.get("/api/markets")
+def api_markets():
+    return {
+        "nasdaq": {
+            "label": "NASDAQ · NEW YORK",
+            "status": market_status("America/New_York", 9 * 60 + 30, 16 * 60),
+            "indices": md.get_quotes(tuple(t for t, _ in md.NASDAQ_INDICES)),
+            "watchlist": md.get_quotes(tuple(t for t, _ in md.NASDAQ_WATCHLIST)),
+            "benchmark": "^IXIC",
+        },
+        "bse": {
+            "label": "BSE · MUMBAI",
+            "status": market_status("Asia/Kolkata", 9 * 60 + 15, 15 * 60 + 30),
+            "indices": md.get_quotes(tuple(t for t, _ in md.BSE_INDICES)),
+            "watchlist": md.get_quotes(tuple(t for t, _ in md.BSE_WATCHLIST)),
+            "benchmark": "^BSESN",
+        },
+    }
+
+
+@app.get("/api/tape")
+def api_tape():
+    return md.get_quotes(tuple(md.TAPE_TICKERS))
+
+
+@app.get("/api/history")
+def api_history(ticker: str, range: str = Query("1Y", alias="range")):
+    rng = range.upper()
+    if rng not in md.RANGE_MAP:
+        raise HTTPException(400, f"range must be one of {list(md.RANGE_MAP)}")
+    period, interval = md.RANGE_MAP[rng]
+    df = md.get_history(ticker.upper(), period, interval)
+    if df.empty:
+        raise HTTPException(404, f"No data for '{ticker}'")
+    payload = hist_payload(df)
+    payload["ticker"] = ticker.upper()
+    payload["range"] = rng
+    payload["interval"] = interval
+    return payload
+
+
+@app.get("/api/profile")
+def api_profile(ticker: str):
+    t = ticker.upper()
+    info = md.get_profile(t)
+    if not info:
+        raise HTTPException(404, f"No profile for '{t}'")
+    dy = info.get("dividendYield")
+    if isinstance(dy, (int, float)) and dy > 1:  # yfinance sometimes returns percent
+        dy = dy / 100
+    fields = {
+        "name": info.get("longName") or info.get("shortName") or t,
+        "last": info.get("regularMarketPrice") or info.get("currentPrice"),
+        "market_cap": md.fmt_big(info.get("marketCap")),
+        "pe_ttm": info.get("trailingPE"),
+        "pe_fwd": info.get("forwardPE"),
+        "high_52w": info.get("fiftyTwoWeekHigh"),
+        "low_52w": info.get("fiftyTwoWeekLow"),
+        "beta": info.get("beta"),
+        "div_yield": dy,
+        "revenue": md.fmt_big(info.get("totalRevenue")),
+        "net_margin": info.get("profitMargins"),
+        "roe": info.get("returnOnEquity"),
+        "employees": info.get("fullTimeEmployees"),
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "exchange": info.get("exchange"),
+        "currency": info.get("currency"),
+        "summary": info.get("longBusinessSummary"),
+    }
+    return {"ticker": t, **fields}
+
+
+@app.get("/api/news")
+def api_news(ticker: str, limit: int = 10):
+    return md.get_news(ticker.upper(), limit=limit)
+
+
+@app.get("/api/vol")
+def api_vol(ticker: str, garch: bool = True):
+    t = ticker.upper()
+    df = md.get_history(t, "2y", "1d")
+    if df.empty or len(df) < 130:
+        raise HTTPException(404, f"Not enough history for '{t}'")
+    prices = df["Close"].values
+    idx = df.index.tz_localize(None) if df.index.tz is not None else df.index
+
+    vol21 = quant.rolling_vol_forecast(prices, window=21)
+    vol63 = quant.rolling_vol_forecast(prices, window=63)
+    garch_fc = None
+    if garch:
+        garch_fc = quant.garch_vol_forecast(prices, refit_every=10,
+                                            window=min(252, len(prices) - 10))
+
+    v21 = vol21[~np.isnan(vol21)]
+    cur21 = float(v21[-1])
+    cur63 = float(vol63[~np.isnan(vol63)][-1])
+    pctile = float((v21 < cur21).mean() * 100)
+    garch_next = None
+    if garch_fc is not None:
+        g = garch_fc[~np.isnan(garch_fc)]
+        garch_next = float(g[-1]) if len(g) else None
+
+    return {
+        "ticker": t,
+        "dates": [ts.isoformat() for ts in idx.to_pydatetime()],
+        "close": jlist(prices),
+        "vol21": jlist(vol21),
+        "vol63": jlist(vol63),
+        "garch": jlist(garch_fc) if garch_fc is not None else None,
+        "metrics": {
+            "realized_21d": cur21,
+            "realized_63d": cur63,
+            "percentile_2y": pctile,
+            "garch_next_day": garch_next,
+        },
+    }
+
+
+# ------------------------------------------------------------
+# quant endpoints
+# ------------------------------------------------------------
+
+@app.get("/api/ov")
+def api_ov(S: float, K: float, T_days: int, r: float, sigma: float,
+           opt_type: str = "call"):
+    if opt_type not in ("call", "put"):
+        raise HTTPException(400, "opt_type must be call or put")
+    T = T_days / 252
+    g = quant.bs_price_delta_greeks(S, K, T, r, sigma, opt_type)
+
+    spots = np.linspace(S * 0.5, S * 1.5, 120)
+    curves = {k: [] for k in ("price", "delta", "gamma", "vega")}
+    for s in spots:
+        gg = quant.bs_price_delta_greeks(float(s), K, T, r, sigma, opt_type)
+        for k in curves:
+            curves[k].append(round(float(gg[k]), 6))
+
+    return {
+        "greeks": {k: round(float(v), 6) for k, v in g.items()},
+        "spots": jlist(spots),
+        "curves": curves,
+    }
+
+
+@app.get("/api/gbm")
+def api_gbm(S0: float, mu: float, sigma: float, T_days: int,
+            n_paths: int = 20, seed: int = 42):
+    n_paths = min(n_paths, 200)
+    n_steps = int(T_days)
+    paths = quant.simulate_gbm_paths(S0, mu, sigma, T_days, n_steps, n_paths, seed)
+    finals = paths[:, -1]
+    return {
+        "t": list(range(n_steps + 1)),
+        "paths": [jlist(p) for p in paths],
+        "mean_path": jlist(paths.mean(axis=0)),
+        "stats": {
+            "mean_final": float(finals.mean()),
+            "std_final": float(finals.std()),
+            "min_final": float(finals.min()),
+            "max_final": float(finals.max()),
+        },
+    }
+
+
+@app.get("/api/mc")
+def api_mc(S0: float, K: float, r: float, sigma: float, T_days: int,
+           n_steps: int = 63, n_paths: int = 10000,
+           opt_type: str = "call", seed: int = 42):
+    n_paths = min(n_paths, 200_000)
+    price, stderr, _, finals, payoffs = quant.monte_carlo_price(
+        S0, K, r, sigma, T_days, n_steps, n_paths, opt_type, seed)
+    bs = quant.bs_price_delta_greeks(S0, K, T_days / 252, r, sigma, opt_type)
+    return {
+        "mc_price": float(price),
+        "ci95": float(1.96 * stderr),
+        "bs_price": float(bs["price"]),
+        "diff": float(price - bs["price"]),
+        "final_prices": jlist(finals[:20000]),
+        "payoffs": jlist(payoffs[:20000]),
+    }
+
+
+@app.get("/api/backtest")
+def api_backtest(ticker: str, start: str, window_days: int = 63,
+                 k_mult: float = 1.0, r: float = 0.04, tc: float = 0.001,
+                 rebalance: int = 1, opt_type: str = "call"):
+    t = ticker.upper()
+    window_days = int(np.clip(window_days, 20, 252))
+
+    df = md.get_history(t, "max", "1d")
+    if df.empty:
+        raise HTTPException(404, f"No data for '{t}'")
+    idx = df.index.tz_localize(None) if df.index.tz is not None else df.index
+    try:
+        start_ts = pd.to_datetime(start)
+    except Exception:
+        raise HTTPException(400, f"Bad start date '{start}'")
+    sub = df.loc[idx >= start_ts].iloc[:window_days]
+    if len(sub) < window_days:
+        raise HTTPException(400, f"Only {len(sub)} sessions for {t} from {start} "
+                                 f"(need {window_days})")
+
+    prices = sub["Close"].values.astype(float)
+    sub_idx = sub.index.tz_localize(None) if sub.index.tz is not None else sub.index
+    dates = [ts.isoformat() for ts in sub_idx.to_pydatetime()]
+
+    S0 = float(prices[0])
+    K = round(S0 * k_mult, 2)
+    T_total = window_days / 252
+    n_steps = window_days - 1
+    static_sigma = float(np.diff(np.log(prices)).std() * np.sqrt(252))
+
+    roll_fc = quant.clean_sigma_series(
+        quant.rolling_vol_forecast(prices, window=21), static_sigma)
+    garch_fc = quant.clean_sigma_series(
+        quant.garch_vol_forecast(prices, window=min(126, window_days - 5)),
+        static_sigma)
+    static_series = np.full(len(prices), static_sigma)
+
+    strategies = {}
+    for key, label, sigma_series in [
+        ("static", "STATIC σ (NAIVE)", static_series),
+        ("rolling", "ROLLING-WINDOW FORECAST", roll_fc),
+        ("garch", "GARCH(1,1) FORECAST", garch_fc),
+    ]:
+        hedged, unhedged, hist = quant.hedge_path_variable_sigma(
+            prices, K, r, sigma_series, T_total, n_steps, tc, rebalance,
+            opt_type, return_history=True)
+        strategies[key] = {
+            "label": label,
+            "hedged_pnl": round(float(hedged), 4),
+            "unhedged_pnl": round(float(unhedged), 4),
+            "portfolio_value": jlist(hist["portfolio_value"]),
+            "sigma_series": jlist(sigma_series),
+        }
+
+    return {
+        "ticker": t,
+        "dates": dates,
+        "prices": jlist(prices),
+        "start_price": S0,
+        "strike": K,
+        "realized_vol": static_sigma,
+        "strategies": strategies,
+    }
+
+
+# ------------------------------------------------------------
+# frontend
+# ------------------------------------------------------------
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    return FileResponse(STATIC_DIR / "index.html")

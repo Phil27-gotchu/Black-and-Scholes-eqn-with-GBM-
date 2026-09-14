@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B&amp;S TERMINAL</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/terminal.css">
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+</head>
+<body>
+
+  <!-- top bar -->
+  <header class="topbar">
+    <div class="brand">B&amp;S<span> TERMINAL</span></div>
+    <div class="clocks">
+      <div class="clock" id="clock-ny">
+        <span class="dot" id="dot-ny"></span>
+        <span class="city">NEW YORK</span>
+        <span class="time" id="time-ny">--:--</span>
+        <span class="mkt" id="mkt-ny">—</span>
+      </div>
+      <div class="clock" id="clock-bom">
+        <span class="dot" id="dot-bom"></span>
+        <span class="city">MUMBAI</span>
+        <span class="time" id="time-bom">--:--</span>
+        <span class="mkt" id="mkt-bom">—</span>
+      </div>
+    </div>
+    <div class="top-right">
+      <span class="sec-context" id="sec-context">AAPL · MARKETS</span>
+      <button id="theme-toggle" class="theme-btn" title="Toggle dark / light mode">
+        <span id="theme-icon">◐</span> <span id="theme-label">LIGHT</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- command bar -->
+  <div class="cmdbar">
+    <span class="prompt">&gt;</span>
+    <input id="cmdline" type="text" autocomplete="off" spellcheck="false"
+           placeholder="ENTER COMMAND — e.g.  GP AAPL · DES RELIANCE.BO · VOL TCS.BO · OV · HELP">
+    <button id="cmd-go" class="go-btn">GO</button>
+  </div>
+
+  <!-- function keys -->
+  <nav class="fkeys" id="fkeys"></nav>
+
+  <!-- ticker tape -->
+  <div class="tape-wrap"><div class="tape" id="tape"></div></div>
+
+  <!-- page content -->
+  <main id="main"><div class="loading">CONNECTING…</div></main>
+
+  <footer class="statusbar">
+    <span>B&amp;S TERMINAL v2.0</span>
+    <span>DATA: YAHOO FINANCE (DELAYED) — FOR RESEARCH &amp; EDUCATION, NOT INVESTMENT ADVICE</span>
+    <span id="status-msg">READY</span>
+  </footer>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
