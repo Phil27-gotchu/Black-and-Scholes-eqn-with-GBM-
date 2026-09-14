@@ -174,7 +174,8 @@ function runCommand(raw) {
   const head = ALIASES[parts[0]] || parts[0];
   if (FUNCTIONS[head]) {
     nav(head, parts[1] && looksLikeTicker(parts[1]) ? parts[1] : undefined);
-  } else if (looksLikeTicker(head)) {
+  } else if (parts.length === 1 && looksLikeTicker(head)) {
+    // bare ticker -> load its chart, Bloomberg style
     nav(["GP", "DES", "VOL", "N"].includes(state.func) ? state.func : "GP", head);
   } else {
     nav("HELP");

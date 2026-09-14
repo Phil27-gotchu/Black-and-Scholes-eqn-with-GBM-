@@ -249,6 +249,21 @@ def _fetch_history(ticker: str, period: str, interval: str) -> pd.DataFrame:
     return df.dropna(subset=["Close"])
 
 
+def _fetch_smart(ticker: str, period: str, interval: str) -> pd.DataFrame:
+    """
+    Like _fetch_history, but works around a Yahoo quirk where period='1d'
+    returns nothing for some exchanges (e.g. Indian symbols after the session
+    rolls over): fall back to 5 days of intraday bars and keep the last session.
+    """
+    df = _fetch_history(ticker, period, interval)
+    if df.empty and period == "1d":
+        df5 = _fetch_history(ticker, "5d", interval)
+        if not df5.empty:
+            last_day = df5.index[-1].date()
+            df = df5[df5.index.date == last_day]
+    return df
+
+
 @ttl_cache(180)
 def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
     """
@@ -257,10 +272,10 @@ def get_history(ticker: str, period: str = "1y", interval: str = "1d") -> pd.Dat
     back to the same company's NSE listing ('.NS') — dual-listed, prices are
     virtually identical.
     """
-    df = _fetch_history(ticker, period, interval)
+    df = _fetch_smart(ticker, period, interval)
     if len(df) <= 3 and ticker.upper().endswith(".BO"):
         alt = ticker[:-3] + ".NS"
-        df_alt = _fetch_history(alt, period, interval)
+        df_alt = _fetch_smart(alt, period, interval)
         if len(df_alt) > len(df):
             return df_alt
     return df

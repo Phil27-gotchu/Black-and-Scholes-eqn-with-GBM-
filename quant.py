@@ -148,6 +148,8 @@ def hedge_path_variable_sigma(prices, K, r, sigma_hedge_series, T_total, n_steps
                "sigma_used": []} if return_history else None
 
     for t in range(n_steps + 1):
+        if t > 0:
+            cash *= np.exp(r * dt)  # cash account accrues/pays interest
         sigma_t = sigma_hedge_series[min(t, len(sigma_hedge_series) - 1)]
         if t % rebalance_every != 0 and t != n_steps:
             if return_history:
