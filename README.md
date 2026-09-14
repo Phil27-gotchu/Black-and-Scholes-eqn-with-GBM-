@@ -1,4 +1,4 @@
-# B&S Terminal
+# Bloomberg Terminal  for NASDAQ[NEWYORK STOCK EXG] AND  BSE[INDIAN STOCK EXG]
 
 A Bloomberg-style market and derivatives terminal covering **NASDAQ (US)** and
 **BSE (India)**, built on a FastAPI backend with a dependency-free HTML/CSS/JS
