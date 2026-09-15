@@ -13,6 +13,7 @@ Serves the single-page terminal frontend from /static and a JSON API:
     /api/news               headlines
     /api/vol                realized + GARCH volatility series
     /api/ov                 Black-Scholes valuation + greek curves
+    /api/iv                 implied vol smile, term structure, vs realized/GARCH
     /api/gbm                GBM path simulation
     /api/mc                 Monte Carlo option pricing
     /api/backtest           historical delta-hedge backtest
@@ -213,6 +214,150 @@ def api_vol(ticker: str, garch: bool = True):
             "realized_63d": cur63,
             "percentile_2y": pctile,
             "garch_next_day": garch_next,
+        },
+    }
+
+
+def _finite(x):
+    return x is not None and not (isinstance(x, float) and (np.isnan(x) or np.isinf(x)))
+
+
+def _invert_chain_side(rows, S, T, r, option_type):
+    out = []
+    for row in rows:
+        k = row.get("strike")
+        if k is None:
+            continue
+        mid = quant.option_mid(row.get("bid"), row.get("ask"), row.get("last"))
+        iv = quant.implied_vol(mid, S, k, T, r, option_type) if mid else float("nan")
+        out.append({
+            "strike": round(float(k), 4),
+            "mid": None if mid is None else round(float(mid), 4),
+            "iv": round(float(iv), 6) if _finite(iv) else None,
+            "yahoo_iv": row.get("yahoo_iv"),
+            "volume": row.get("volume") or 0,
+            "oi": row.get("oi") or 0,
+        })
+    return out
+
+
+def _atm_iv(calls, puts, spot):
+    """OTM convention: put IV below spot, call IV above; ATM = closest strike."""
+    by_k = {}
+    for row in puts:
+        if row["iv"] is not None and row["strike"] <= spot:
+            by_k[row["strike"]] = row["iv"]
+    for row in calls:
+        if row["iv"] is not None and row["strike"] >= spot:
+            by_k[row["strike"]] = row["iv"]
+    if not by_k:
+        pool = [row for row in calls + puts if row["iv"] is not None]
+        if not pool:
+            return None, None
+        nearest = min(pool, key=lambda row: abs(row["strike"] - spot))
+        return nearest["strike"], nearest["iv"]
+    k = min(by_k, key=lambda x: abs(x - spot))
+    return k, by_k[k]
+
+
+@app.get("/api/iv")
+def api_iv(ticker: str, expiry: str | None = None, r: float = 0.04, garch: bool = True):
+    t = ticker.upper()
+    symbol = md.option_chain_symbol(t)
+    expiries = list(md.get_option_expiries(t))
+    if not expiries:
+        raise HTTPException(404, f"No listed options for '{t}' (tried {symbol}).")
+
+    if expiry:
+        expiry = expiry[:10]
+        if expiry not in expiries:
+            raise HTTPException(400, f"expiry must be one of {expiries[:12]}")
+    else:
+        expiry = expiries[0]
+
+    spot = md.get_spot(t)
+    if spot is None:
+        raise HTTPException(404, f"No spot price for '{t}'.")
+
+    exp_dt = pd.Timestamp(expiry).normalize()
+    today = pd.Timestamp.now(tz=None).normalize()
+    cal_days = max(int((exp_dt - today).days), 1)
+    T = cal_days / 365.25
+
+    chain = md.get_option_chain(t, expiry)
+    calls = _invert_chain_side(chain.get("calls") or [], spot, T, r, "call")
+    puts = _invert_chain_side(chain.get("puts") or [], spot, T, r, "put")
+    atm_k, atm_iv = _atm_iv(calls, puts, spot)
+
+    otm = []
+    for row in puts:
+        if row["iv"] is not None and row["strike"] <= spot:
+            otm.append({"strike": row["strike"], "iv": row["iv"], "side": "put"})
+    for row in calls:
+        if row["iv"] is not None and row["strike"] >= spot:
+            otm.append({"strike": row["strike"], "iv": row["iv"], "side": "call"})
+    otm.sort(key=lambda x: x["strike"])
+
+    term = []
+    for exp in expiries[:8]:
+        if exp == expiry:
+            term.append({"expiry": exp, "atm_iv": atm_iv, "T_days": cal_days})
+            continue
+        exp_i = pd.Timestamp(exp).normalize()
+        days_i = max(int((exp_i - today).days), 1)
+        T_i = days_i / 365.25
+        ch_i = md.get_option_chain(t, exp)
+        c_i = _invert_chain_side(ch_i.get("calls") or [], spot, T_i, r, "call")
+        p_i = _invert_chain_side(ch_i.get("puts") or [], spot, T_i, r, "put")
+        _, iv_i = _atm_iv(c_i, p_i, spot)
+        term.append({"expiry": exp, "atm_iv": iv_i, "T_days": days_i})
+
+    df = md.get_history(t, "2y", "1d")
+    vol21 = garch_fc = None
+    realized_21d = garch_next = None
+    dates, close = [], []
+    if not df.empty and len(df) >= 30:
+        prices = df["Close"].values
+        idx = df.index.tz_localize(None) if df.index.tz is not None else df.index
+        dates = [ts.isoformat() for ts in idx.to_pydatetime()]
+        close = jlist(prices)
+        vol21 = quant.rolling_vol_forecast(prices, window=21)
+        v21 = vol21[~np.isnan(vol21)]
+        realized_21d = float(v21[-1]) if len(v21) else None
+        if garch and len(prices) >= 130:
+            garch_fc = quant.garch_vol_forecast(
+                prices, refit_every=10, window=min(252, len(prices) - 10))
+            g = garch_fc[~np.isnan(garch_fc)]
+            garch_next = float(g[-1]) if len(g) else None
+
+    premium = None
+    if atm_iv is not None and realized_21d is not None:
+        premium = atm_iv - realized_21d
+
+    return {
+        "ticker": t,
+        "chain_symbol": chain.get("symbol") or symbol,
+        "spot": round(float(spot), 4),
+        "r": r,
+        "expiries": expiries,
+        "expiry": expiry,
+        "T_days": cal_days,
+        "metrics": {
+            "atm_strike": atm_k,
+            "atm_iv": atm_iv,
+            "realized_21d": realized_21d,
+            "garch_next_day": garch_next,
+            "vol_premium": premium,
+        },
+        "calls": calls,
+        "puts": puts,
+        "otm_skew": otm,
+        "term": term,
+        "history": {
+            "dates": dates,
+            "close": close,
+            "vol21": jlist(vol21) if vol21 is not None else [],
+            "garch": jlist(garch_fc) if garch_fc is not None else None,
         },
     }
 

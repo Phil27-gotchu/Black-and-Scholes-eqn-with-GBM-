@@ -80,6 +80,41 @@ def test_analytic_delta_matches_finite_difference(call):
 
 
 # ------------------------------------------------------------
+# Implied vol (Newton-Raphson)
+# ------------------------------------------------------------
+
+def test_implied_vol_roundtrip_atm_call(call):
+    iv = quant.implied_vol(call["price"], S, K, T, R, "call", sigma0=0.1)
+    assert abs(iv - SIG) < 1e-6
+
+
+def test_implied_vol_roundtrip_atm_put(put):
+    iv = quant.implied_vol(put["price"], S, K, T, R, "put", sigma0=0.4)
+    assert abs(iv - SIG) < 1e-6
+
+
+def test_implied_vol_roundtrip_otm_call():
+    sig = 0.35
+    g = quant.bs_price_delta_greeks(100, 110, T, R, sig, "call")
+    iv = quant.implied_vol(g["price"], 100, 110, T, R, "call", sigma0=0.2)
+    assert abs(iv - sig) < 1e-5
+
+
+def test_implied_vol_below_intrinsic_is_nan():
+    assert np.isnan(quant.implied_vol(1.0, 110, 100, T, R, "call"))
+
+
+def test_implied_vol_expired_is_nan():
+    assert np.isnan(quant.implied_vol(5.0, 100, 100, 0.0, R, "call"))
+
+
+def test_option_mid_prefers_bid_ask():
+    assert quant.option_mid(1.0, 1.2, 9.0) == pytest.approx(1.1)
+    assert quant.option_mid(0, 0, 2.5) == pytest.approx(2.5)
+    assert quant.option_mid(0, 0, 0) is None
+
+
+# ------------------------------------------------------------
 # GBM
 # ------------------------------------------------------------
 

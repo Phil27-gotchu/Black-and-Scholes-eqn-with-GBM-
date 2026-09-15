@@ -61,6 +61,10 @@ historical delta-hedge backtester with GARCH volatility forecasting.
   business description, headlines.
 - **VOL** — realized volatility (21d / 63d rolling) plus a rolling
   GARCH(1,1) one-day-ahead forecast, fit with no look-ahead.
+- **IV** — implied volatility from listed option chains: Newton-Raphson
+  inversion of Black-Scholes on bid/ask mids, OTM smile/skew, ATM term
+  structure, and live ATM IV vs realized vs GARCH (the volatility risk
+  premium). Indices map to ETF chains (`^GSPC` → SPY); `.BO` names use NSE.
 - **N** — security and broad-market news.
 
 **Quant lab**
@@ -76,7 +80,7 @@ historical delta-hedge backtester with GARCH volatility forecasting.
 
 **Terminal UX**
 
-- Bloomberg-style command line: `GP RELIANCE.BO`, `DES NVDA`, `VOL TCS.BO`,
+- Bloomberg-style command line: `GP RELIANCE.BO`, `IV NVDA`, `VOL TCS.BO`,
   `HB`, or just a bare ticker. Press `/` to focus the command line.
 - Dark and light themes (toggle in the top bar, persisted across sessions).
 - Scrolling ticker tape, New York + Mumbai market clocks with open/closed
@@ -111,6 +115,7 @@ Open <http://localhost:8000>. Interactive API docs are at
 | `GP <ticker>`   | Price chart (candles, volume, moving averages)        |
 | `DES <ticker>`  | Security profile                                      |
 | `VOL <ticker>`  | Volatility monitor (realized + GARCH forecast)        |
+| `IV <ticker>`   | Implied vol smile, term structure, vs realized/GARCH  |
 | `N <ticker>`    | News headlines                                        |
 | `OV`            | Black-Scholes option valuation                        |
 | `GBM`           | GBM path simulator                                    |
@@ -164,6 +169,7 @@ endpoints are mocked so CI stays offline and deterministic.
 | `/api/watchlist/add`, `/api/watchlist/remove` | Customize section watchlists (POST) |
 | `/api/history`   | OHLCV for any Yahoo symbol, `range=1D…MAX`     |
 | `/api/vol`       | Realized + GARCH volatility series             |
+| `/api/iv`        | Implied vol smile, term structure, vs realized |
 | `/api/ov`        | Black-Scholes greeks + curves                  |
 | `/api/mc`        | Monte Carlo pricing vs closed form             |
 | `/api/backtest`  | Delta-hedge backtest on historical windows     |

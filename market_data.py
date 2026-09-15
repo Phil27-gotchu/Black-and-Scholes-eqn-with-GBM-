@@ -338,3 +338,75 @@ def fmt_big(x):
         if abs(x) >= div:
             return f"{x / div:.2f}{unit}"
     return f"{x:,.2f}"
+
+
+OPTION_UNDERLYING = {
+    "^GSPC": "SPY",
+    "^DJI": "DIA",
+    "^IXIC": "QQQ",
+    "^NDX": "QQQ",
+    "^RUT": "IWM",
+}
+
+
+def resolve_option_ticker(ticker: str) -> str:
+    """Map indices to a liquid ETF options chain; try NSE for .BO names."""
+    t = ticker.strip().upper()
+    return OPTION_UNDERLYING.get(t, t)
+
+
+def option_chain_symbol(ticker: str) -> str:
+    """Yahoo listed-options symbol. Index futures map to ETFs; BSE names use NSE."""
+    t = resolve_option_ticker(ticker)
+    if t.endswith(".BO"):
+        return t[:-3] + ".NS"
+    return t
+
+
+@ttl_cache(300)
+def get_option_expiries(ticker: str) -> tuple:
+    symbol = option_chain_symbol(ticker)
+    try:
+        return tuple(yf.Ticker(symbol).options or ())
+    except Exception:
+        return ()
+
+
+@ttl_cache(300)
+def get_option_chain(ticker: str, expiry: str) -> dict:
+    """Calls/puts as JSON-friendly dicts for one expiry."""
+    symbol = option_chain_symbol(ticker)
+    try:
+        chain = yf.Ticker(symbol).option_chain(expiry)
+    except Exception:
+        return {"calls": [], "puts": [], "symbol": symbol}
+
+    def pack(df):
+        out = []
+        if df is None or df.empty:
+            return out
+        for _, row in df.iterrows():
+            yiv = row["impliedVolatility"] if "impliedVolatility" in df.columns else None
+            out.append({
+                "strike": float(row["strike"]) if pd.notna(row.get("strike")) else None,
+                "bid": float(row["bid"]) if pd.notna(row.get("bid")) else 0.0,
+                "ask": float(row["ask"]) if pd.notna(row.get("ask")) else 0.0,
+                "last": float(row["lastPrice"]) if pd.notna(row.get("lastPrice")) else 0.0,
+                "volume": int(row["volume"]) if pd.notna(row.get("volume")) else 0,
+                "oi": int(row["openInterest"]) if pd.notna(row.get("openInterest")) else 0,
+                "yahoo_iv": float(yiv) if yiv is not None and pd.notna(yiv) else None,
+            })
+        return out
+
+    return {"calls": pack(chain.calls), "puts": pack(chain.puts), "symbol": symbol}
+
+
+def get_spot(ticker: str):
+    h = get_history(ticker, "5d", "1d")
+    if h.empty:
+        alt = option_chain_symbol(ticker)
+        if alt != ticker.upper():
+            h = get_history(alt, "5d", "1d")
+    if h.empty:
+        return None
+    return float(h["Close"].iloc[-1])

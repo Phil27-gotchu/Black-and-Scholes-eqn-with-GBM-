@@ -108,6 +108,56 @@ def bs_price_delta_greeks(S, K, T, r, sigma, option_type="call"):
     return dict(price=price, delta=delta, gamma=gamma, vega=vega, theta=theta, rho=rho)
 
 
+def implied_vol(market_price, S, K, T, r, option_type="call",
+                sigma0=0.25, tol=1e-8, max_iter=50):
+    """
+    Newton-Raphson inversion of Black-Scholes: find σ such that
+    BS(S, K, T, r, σ) = market_price.
+
+    Vega in bs_price_delta_greeks is per 1% vol, so dPrice/dσ = vega * 100.
+    Returns NaN if the quote is unusable (expired, below intrinsic, flat vega).
+    """
+    try:
+        market_price = float(market_price)
+    except (TypeError, ValueError):
+        return float("nan")
+    if T <= 0 or market_price <= 0 or S <= 0 or K <= 0:
+        return float("nan")
+
+    df = np.exp(-r * T)
+    floor = max(S - K * df, 0.0) if option_type == "call" else max(K * df - S, 0.0)
+    if market_price < floor - 1e-8:
+        return float("nan")
+
+    sigma = float(sigma0)
+    for _ in range(max_iter):
+        sigma = min(max(sigma, 1e-4), 5.0)
+        g = bs_price_delta_greeks(S, K, T, r, sigma, option_type)
+        diff = g["price"] - market_price
+        if abs(diff) < tol:
+            return float(sigma)
+        vega_unit = g["vega"] * 100.0
+        if abs(vega_unit) < 1e-12:
+            return float("nan")
+        sigma -= diff / vega_unit
+    return float(sigma) if abs(diff) < 1e-4 else float("nan")
+
+
+def option_mid(bid, ask, last):
+    """Mid quote, falling back to last trade."""
+    try:
+        bid, ask, last = float(bid or 0), float(ask or 0), float(last or 0)
+    except (TypeError, ValueError):
+        return None
+    if bid > 0 and ask > 0 and ask >= bid:
+        return 0.5 * (bid + ask)
+    if last > 0:
+        return last
+    if bid > 0:
+        return bid
+    return None
+
+
 # ============================================================
 # VARIABLE-SIGMA HEDGE ENGINE
 # ============================================================

@@ -214,3 +214,44 @@ def test_markets_uses_quotes_mock(client, monkeypatch):
     assert body["bse"]["benchmark"] == "^BSESN"
     assert body["nasdaq"]["status"]["label"] in ("OPEN", "CLOSED")
     assert body["nasdaq"]["watchlist"][0]["ticker"] == "AAPL"
+
+
+def test_iv_404_without_chain(client, monkeypatch):
+    monkeypatch.setattr(terminal.md, "get_option_expiries", lambda t: ())
+    r = client.get("/api/iv", params={"ticker": "AAPL", "garch": False})
+    assert r.status_code == 404
+
+
+def test_iv_smile_from_synthetic_chain(client, monkeypatch):
+    exp = (pd.Timestamp.now().normalize() + pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+    t_years = 30 / 365.25
+    r, spot = 0.04, 100.0
+
+    def px(k, sig, kind):
+        return quant.bs_price_delta_greeks(spot, k, t_years, r, sig, kind)["price"]
+
+    def row(k, mid):
+        return dict(strike=k, bid=mid - 0.05, ask=mid + 0.05, last=mid,
+                    volume=50, oi=50, yahoo_iv=None)
+
+    chain = {
+        "symbol": "AAPL",
+        "calls": [row(90, px(90, 0.30, "call")), row(100, px(100, 0.25, "call")),
+                  row(110, px(110, 0.22, "call"))],
+        "puts": [row(90, px(90, 0.30, "put")), row(100, px(100, 0.25, "put")),
+                 row(110, px(110, 0.22, "put"))],
+    }
+    monkeypatch.setattr(terminal.md, "get_option_expiries", lambda t: (exp,))
+    monkeypatch.setattr(terminal.md, "option_chain_symbol", lambda t: "AAPL")
+    monkeypatch.setattr(terminal.md, "get_spot", lambda t: spot)
+    monkeypatch.setattr(terminal.md, "get_option_chain", lambda t, e: chain)
+    monkeypatch.setattr(terminal.md, "get_history", lambda *a, **k: _ohlc(n=80))
+
+    resp = client.get("/api/iv", params={"ticker": "AAPL", "garch": False})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["expiry"] == exp
+    assert abs(body["metrics"]["atm_iv"] - 0.25) < 0.01
+    assert body["otm_skew"]
+    assert any(c["iv"] is not None for c in body["calls"])
+    assert body["metrics"]["vol_premium"] is not None

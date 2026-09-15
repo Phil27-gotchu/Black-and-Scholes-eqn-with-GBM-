@@ -22,6 +22,7 @@ const FUNCTIONS = {
   GP: "PRICE CHART",
   DES: "PROFILE",
   VOL: "VOLATILITY",
+  IV: "IMPLIED VOL",
   N: "NEWS",
   OV: "OPTION VAL",
   GBM: "GBM SIM",
@@ -31,7 +32,7 @@ const FUNCTIONS = {
 };
 
 const ALIASES = { W: "MKT", MON: "MKT", NASDAQ: "NDQ", INDIA: "BSE", SENSEX: "BSE",
-                  G: "GP", BT: "HB", "?": "HELP", NEWS: "N" };
+                  G: "GP", BT: "HB", "?": "HELP", NEWS: "N", IMPLIED: "IV", SMILE: "IV" };
 
 const $ = (sel) => document.querySelector(sel);
 const main = $("#main");
@@ -176,7 +177,7 @@ function runCommand(raw) {
     nav(head, parts[1] && looksLikeTicker(parts[1]) ? parts[1] : undefined);
   } else if (parts.length === 1 && looksLikeTicker(head)) {
     // bare ticker -> load its chart, Bloomberg style
-    nav(["GP", "DES", "VOL", "N"].includes(state.func) ? state.func : "GP", head);
+    nav(["GP", "DES", "VOL", "N", "IV"].includes(state.func) ? state.func : "GP", head);
   } else {
     nav("HELP");
   }
@@ -603,6 +604,122 @@ async function pageVOL(token) {
   }
 }
 
+/* ---------------- IV implied vol ---------------- */
+
+async function pageIV(token) {
+  const expParam = state.ivExpiry ? `&expiry=${encodeURIComponent(state.ivExpiry)}` : "";
+  main.innerHTML = `
+    <div class="panel"><div class="body form-row">
+      <div class="field"><label>SECURITY</label>
+        <input id="iv-ticker" value="${esc(state.ticker)}" style="width:170px"></div>
+      <div class="field"><label>EXPIRY</label>
+        <select id="iv-expiry"><option>LOADING…</option></select></div>
+      <span style="color:var(--muted);font-size:11px;padding-bottom:8px">
+        NEWTON–RAPHSON IV FROM MID QUOTES · OTM SKEW (PUTS BELOW SPOT, CALLS ABOVE) ·
+        PREMIUM = ATM IV − REALIZED 21D</span>
+    </div></div>
+    <div class="grid-6 metric-row" id="iv-metrics"></div>
+    <div class="grid-2">
+      <div class="panel"><div class="body"><div class="chart" id="iv-smile"><div class="loading">INVERTING CHAIN…</div></div></div></div>
+      <div class="panel"><div class="body"><div class="chart" id="iv-term"><div class="loading">TERM STRUCTURE…</div></div></div></div>
+    </div>
+    <div class="panel"><div class="body"><div class="chart" id="iv-hist"><div class="loading">REALIZED vs GARCH…</div></div></div></div>
+    <div id="iv-note"></div>`;
+
+  $("#iv-ticker").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      state.ivExpiry = null;
+      nav("IV", e.target.value.trim().toUpperCase());
+    }
+  });
+
+  try {
+    const d = await api(`/api/iv?ticker=${encodeURIComponent(state.ticker)}${expParam}&garch=true`);
+    if (token !== state.renderToken) return;
+    state.ivExpiry = d.expiry;
+
+    const sel = $("#iv-expiry");
+    sel.innerHTML = d.expiries.map((ex) =>
+      `<option value="${esc(ex)}"${ex === d.expiry ? " selected" : ""}>${esc(ex)}</option>`).join("");
+    sel.addEventListener("change", () => { state.ivExpiry = sel.value; render(); });
+
+    const m = d.metrics;
+    const prem = m.vol_premium;
+    $("#iv-metrics").innerHTML =
+      metricCard("SPOT", fmt(d.spot)) +
+      metricCard("ATM STRIKE", m.atm_strike != null ? fmt(m.atm_strike) : "—") +
+      metricCard("ATM IV", m.atm_iv != null ? pctf(m.atm_iv) : "—") +
+      metricCard("REALIZED 21D", m.realized_21d != null ? pctf(m.realized_21d) : "—") +
+      metricCard("GARCH NEXT-DAY", m.garch_next_day != null ? pctf(m.garch_next_day) : "—") +
+      metricCard("IV − REALIZED", prem != null ? (prem >= 0 ? "+" : "") + pctf(prem) : "—",
+        prem == null ? "" : (prem >= 0 ? "OPTIONS EXPENSIVE vs HISTORY" : "OPTIONS CHEAP vs HISTORY"),
+        prem == null ? "" : chgCls(prem));
+
+    const p = palette();
+    const callIV = d.calls.filter((x) => x.iv != null);
+    const putIV = d.puts.filter((x) => x.iv != null);
+    plot($("#iv-smile"), [
+      { x: putIV.map((x) => x.strike), y: putIV.map((x) => x.iv), name: "PUT IV",
+        type: "scatter", mode: "lines+markers",
+        line: { color: p.purple, width: 1.3 }, marker: { size: 5 } },
+      { x: callIV.map((x) => x.strike), y: callIV.map((x) => x.iv), name: "CALL IV",
+        type: "scatter", mode: "lines+markers",
+        line: { color: p.cyan, width: 1.3 }, marker: { size: 5 } },
+      { x: d.otm_skew.map((x) => x.strike), y: d.otm_skew.map((x) => x.iv), name: "OTM SKEW",
+        type: "scatter", mode: "lines",
+        line: { color: p.accent, width: 2 } },
+    ], baseLayout(`${d.chain_symbol} SMILE — ${d.expiry} (${d.T_days}D)`, 360, {
+      yaxis: Object.assign(baseLayout().yaxis, { tickformat: ".0%" }),
+      showlegend: true,
+      shapes: [{ type: "line", x0: d.spot, x1: d.spot, yref: "paper", y0: 0, y1: 1,
+                 line: { color: p.muted, width: 1, dash: "dot" } }],
+    }));
+
+    plot($("#iv-term"), [{
+      x: d.term.map((x) => x.expiry),
+      y: d.term.map((x) => x.atm_iv),
+      name: "ATM IV", type: "scatter", mode: "lines+markers",
+      line: { color: p.accent, width: 1.8 }, marker: { size: 7 },
+    }], baseLayout("ATM IV TERM STRUCTURE", 360, {
+      yaxis: Object.assign(baseLayout().yaxis, { tickformat: ".0%" }),
+    }));
+
+    const h = d.history;
+    const traces = [
+      { x: h.dates, y: h.vol21, name: "REALIZED 21D", type: "scatter", mode: "lines",
+        line: { color: p.cyan, width: 1.4 } },
+    ];
+    if (h.garch) traces.push({ x: h.dates, y: h.garch, name: "GARCH(1,1) FCAST",
+      type: "scatter", mode: "lines",
+      line: { color: p.up, width: 1.4, dash: "dot" } });
+    const layout = baseLayout(
+      `${d.ticker} — IMPLIED vs REALIZED vs GARCH (LIVE ATM IV AS DASH)`, 420, {
+        yaxis: Object.assign(baseLayout().yaxis, { tickformat: ".0%" }),
+        showlegend: true,
+        shapes: m.atm_iv == null ? [] : [{
+          type: "line", xref: "paper", x0: 0, x1: 1, y0: m.atm_iv, y1: m.atm_iv,
+          line: { color: p.accent, width: 1.6, dash: "dash" },
+        }],
+        annotations: m.atm_iv == null ? [] : [{
+          xref: "paper", x: 1, y: m.atm_iv, xanchor: "right", yanchor: "bottom",
+          text: "ATM IV", showarrow: false,
+          font: { color: p.accent, size: 11, family: "IBM Plex Mono, monospace" },
+        }],
+      });
+    plot($("#iv-hist"), traces, layout);
+
+    $("#iv-note").innerHTML =
+      `<div style="color:var(--faint);font-size:10.5px;letter-spacing:1px;margin-top:4px">
+        CHAIN: ${esc(d.chain_symbol)} · IV SOLVED FROM BID/ASK MID VIA NEWTON–RAPHSON ON BLACK-SCHOLES.
+        YAHOO DOES NOT PUBLISH HISTORICAL SINGLE-STOCK IV, SO THE AMBER DASH IS TODAY'S ATM IMPLIED —
+        THE GAP TO REALIZED IS THE LIVE VOLATILITY RISK PREMIUM.
+        ${d.ticker !== d.chain_symbol ? "INDEX/BSE TICKERS MAP TO THE LIQUID ETF OR NSE OPTIONS SYMBOL." : ""}
+       </div>`;
+  } catch (e) {
+    if (token === state.renderToken) main.innerHTML = errBox(e);
+  }
+}
+
 /* ---------------- N news ---------------- */
 
 async function pageN(token) {
@@ -917,6 +1034,7 @@ function pageHELP() {
     ["GP <TICKER>", "PRICE CHART — CANDLES, VOLUME, MA20/MA50 (E.G. GP RELIANCE.BO)"],
     ["DES <TICKER>", "SECURITY PROFILE — FUNDAMENTALS, DESCRIPTION, HEADLINES"],
     ["VOL <TICKER>", "VOLATILITY MONITOR — REALIZED 21D/63D + GARCH(1,1) FORECAST"],
+    ["IV <TICKER>", "IMPLIED VOL — SMILE / SKEW, TERM STRUCTURE, vs REALIZED & GARCH"],
     ["N <TICKER>", "NEWS HEADLINES — SECURITY + BROAD MARKET"],
     ["OV", "OPTION VALUATION — BLACK-SCHOLES PRICE & GREEK CURVES"],
     ["GBM", "GEOMETRIC BROWNIAN MOTION PATH SIMULATOR"],
@@ -942,6 +1060,7 @@ const PAGES = {
   GP: pageGP,
   DES: pageDES,
   VOL: pageVOL,
+  IV: pageIV,
   N: pageN,
   OV: pageOV,
   GBM: pageGBM,

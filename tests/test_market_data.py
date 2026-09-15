@@ -43,3 +43,9 @@ def test_tape_tickers_follow_watchlist(tmp_path, monkeypatch):
     assert "^IXIC" in tape
     assert "^BSESN" in tape
     assert "AAPL" in tape
+
+
+def test_option_symbol_mapping():
+    assert md.resolve_option_ticker("^GSPC") == "SPY"
+    assert md.option_chain_symbol("RELIANCE.BO") == "RELIANCE.NS"
+    assert md.option_chain_symbol("AAPL") == "AAPL"
