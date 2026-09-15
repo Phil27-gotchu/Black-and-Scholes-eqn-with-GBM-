@@ -141,12 +141,20 @@ static/
   index.html     Terminal shell
   css/terminal.css   Dark/light themes via CSS variables
   js/app.js      SPA router, command parser, Plotly rendering
+tests/           pytest suite — put-call parity, hedge-bias, API contracts
 archive/         Early Streamlit prototypes — not used at runtime
 ```
 
 The backend is stateless; all market data is cached in-process with short
 TTLs (quotes 90 s, history 3 min, profiles 1 h). The quant module has no
 framework dependencies and is directly unit-testable.
+
+```bash
+pytest -q
+```
+
+GitHub Actions runs the same suite on every push to `main`. Live Yahoo
+endpoints are mocked so CI stays offline and deterministic.
 
 ### Key API endpoints
 

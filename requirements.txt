@@ -6,3 +6,5 @@ pandas
 scipy
 arch
 statsmodels
+pytest
+httpx
