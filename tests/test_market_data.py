@@ -80,6 +80,22 @@ def test_local_symbol_search_by_name():
     assert any(h["ticker"] == "INFY.BO" for h in hits_in)
 
 
+def test_local_symbol_search_prefix_ranks_ticker():
+    hits = md._local_symbol_search("n", "nasdaq")
+    tickers = [h["ticker"] for h in hits]
+    assert tickers[0] in {"NFLX", "NVDA"}
+    assert "NVDA" in tickers
+    assert "NFLX" in tickers
+    assert "AMZN" not in tickers
+
+
+def test_search_symbols_all_covers_both_markets():
+    hits = md.search_symbols_all("n")
+    tickers = [h["ticker"] for h in hits]
+    assert "NVDA" in tickers
+    assert any(h["name"] == "NVIDIA" for h in hits if h["ticker"] == "NVDA")
+
+
 def test_tag_tickers_by_name_and_symbol():
     assert "AAPL" in md.tag_tickers("Apple unveils cheaper iPhone in India")
     assert "NVDA" in md.tag_tickers("NVIDIA guidance lifts chip stocks")

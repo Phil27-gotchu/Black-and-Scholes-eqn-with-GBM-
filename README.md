@@ -56,7 +56,8 @@ historical delta-hedge backtester with GARCH volatility forecasting.
 - **NDQ / BSE** — focused views per exchange with relative-performance charts
   and headlines.
 - **GP** — candlestick price charts with volume and MA20/MA50, ranges from
-  intraday (1D) to MAX.
+  intraday (1D) to MAX. SECURITY boxes autocomplete as you type
+  (`N` → `NVDA [ NVIDIA ]`); click or Enter to load that name.
 - **DES** — company profile: valuation multiples, margins, 52-week range,
   business description, headlines.
 - **VOL** — realized volatility (21d / 63d rolling) plus a rolling

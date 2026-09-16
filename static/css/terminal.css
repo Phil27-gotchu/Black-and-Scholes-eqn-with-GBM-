@@ -240,6 +240,23 @@ table.q td.rm:hover { color: var(--dn); }
 .wl-opt:hover, .wl-opt.active { background: var(--accent-dim); }
 .wl-empty { color: var(--faint); font-size: 10.5px; letter-spacing: 1px; padding: 8px 10px; }
 
+.tk-search { position: relative; }
+.tk-in { width: 220px; }
+.tk-drop {
+  position: absolute; left: 0; top: calc(100% + 2px); min-width: 280px; width: max-content; max-width: 420px;
+  z-index: 50; background: var(--panel); border: 1px solid var(--accent);
+  max-height: 260px; overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+}
+.tk-opt {
+  display: flex; gap: 8px; align-items: baseline; width: 100%;
+  text-align: left; background: transparent; border: none;
+  border-bottom: 1px solid var(--row-line); padding: 7px 10px;
+  font-family: inherit; cursor: pointer; color: var(--text);
+}
+.tk-opt .tk { color: var(--accent-bright); font-weight: 700; font-size: 11px; white-space: nowrap; }
+.tk-opt .nm { color: var(--muted); font-size: 10.5px; }
+.tk-opt:hover, .tk-opt.active { background: var(--accent-dim); }
+
 /* ---------------- news ---------------- */
 .news-item { padding: 8px 12px; border-bottom: 1px solid var(--row-line); }
 .news-item .hl { color: var(--text); font-size: 12.5px; line-height: 1.45; }

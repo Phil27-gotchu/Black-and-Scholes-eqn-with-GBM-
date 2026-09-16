@@ -216,6 +216,8 @@ main.addEventListener("click", (e) => {
   if (pick) { wlPick(pick.dataset.wlPick, pick.dataset.t); return; }
   const rm = e.target.closest("[data-wl-rm]");
   if (rm) { wlRemove(rm.dataset.wlRm, rm.dataset.t); return; }
+  const tkp = e.target.closest("[data-tk-pick]");
+  if (tkp) { tkApply(tkp.dataset.tkFor, tkp.dataset.tkPick); return; }
   const td = e.target.closest("[data-nav-ticker]");
   if (td) nav("GP", td.dataset.navTicker);
 });
@@ -397,7 +399,102 @@ main.addEventListener("keydown", (e) => {
 
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".wl-search")) wlHideDrop(wlSuggest.section);
+  if (!e.target.closest(".tk-search")) tkHide(tkBox.id);
 });
+
+/* --- security-field autocomplete: NVDA [ NVIDIA ] --- */
+
+function secField(id, value) {
+  return `<div class="field"><label>SECURITY</label>
+    <div class="tk-search">
+      <input id="${id}" class="tk-in" value="${esc(value)}" autocomplete="off" spellcheck="false"
+        placeholder="TYPE N → NVDA [ NVIDIA ]" style="width:220px">
+      <div class="tk-drop" id="${id}-drop" hidden></div>
+    </div></div>`;
+}
+
+const tkBox = { id: null, items: [], hi: -1, timer: null, commit: {} };
+
+function tkHide(id) {
+  const drop = id ? document.getElementById(`${id}-drop`) : document.querySelector(".tk-drop");
+  if (drop) { drop.hidden = true; drop.innerHTML = ""; }
+  if (!id || tkBox.id === id) {
+    tkBox.items = [];
+    tkBox.hi = -1;
+  }
+}
+
+function tkPaint(id) {
+  const drop = document.getElementById(`${id}-drop`);
+  if (!drop) return;
+  if (!tkBox.items.length) {
+    drop.innerHTML = `<div class="wl-empty">NO MATCHES</div>`;
+    drop.hidden = false;
+    return;
+  }
+  drop.innerHTML = tkBox.items.map((it, i) =>
+    `<button type="button" class="tk-opt${i === tkBox.hi ? " active" : ""}"
+       data-tk-pick="${esc(it.ticker)}" data-tk-for="${esc(id)}">
+       <span class="tk">${esc(it.ticker)}</span>
+       <span class="nm">[ ${esc(it.name)} ]</span>
+     </button>`).join("");
+  drop.hidden = false;
+}
+
+async function tkSearch(id) {
+  const inp = document.getElementById(id);
+  const q = (inp?.value || "").trim();
+  if (q.length < 1) { tkHide(id); return; }
+  try {
+    const items = await api(`/api/symbols/search?q=${encodeURIComponent(q)}`);
+    if (document.getElementById(id)?.value.trim() !== q) return;
+    tkBox.id = id;
+    tkBox.items = items;
+    tkBox.hi = items.length ? 0 : -1;
+    tkPaint(id);
+  } catch (_) {
+    tkHide(id);
+  }
+}
+
+function tkApply(id, ticker) {
+  const inp = document.getElementById(id);
+  if (inp) inp.value = ticker;
+  tkHide(id);
+  const fn = tkBox.commit[id];
+  if (fn) fn(ticker);
+}
+
+function bindTickerSuggest(id, onCommit) {
+  const inp = document.getElementById(id);
+  if (!inp) return;
+  tkBox.commit[id] = onCommit || null;
+  inp.addEventListener("input", () => {
+    clearTimeout(tkBox.timer);
+    tkBox.timer = setTimeout(() => tkSearch(id), 160);
+  });
+  inp.addEventListener("keydown", (e) => {
+    const n = tkBox.id === id ? tkBox.items.length : 0;
+    if (e.key === "ArrowDown" && n) {
+      e.preventDefault();
+      tkBox.hi = (tkBox.hi + 1) % n;
+      tkPaint(id);
+    } else if (e.key === "ArrowUp" && n) {
+      e.preventDefault();
+      tkBox.hi = (tkBox.hi - 1 + n) % n;
+      tkPaint(id);
+    } else if (e.key === "Escape") {
+      tkHide(id);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (n && tkBox.hi >= 0) tkApply(id, tkBox.items[tkBox.hi].ticker);
+      else if (onCommit) onCommit((inp.value || "").trim().toUpperCase());
+    }
+  });
+  inp.addEventListener("focus", () => {
+    if ((inp.value || "").trim()) tkSearch(id);
+  });
+}
 
 function panel(title, bodyHTML, sub = "", pad = false) {
   return `<div class="panel"><div class="ttl"><span>${title}</span><span class="sub">${sub}</span></div>
@@ -549,8 +646,7 @@ async function pageGP(token) {
   const ranges = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "MAX"];
   main.innerHTML = `
     <div class="panel"><div class="body form-row">
-      <div class="field"><label>SECURITY</label>
-        <input id="gp-ticker" value="${esc(state.ticker)}" style="width:170px"></div>
+      ${secField("gp-ticker", state.ticker)}
       <div class="field"><label>RANGE</label>
         <div class="range-btns">${ranges.map((rg) =>
           `<button class="fkey${rg === state.gpRange ? " active" : ""}" data-range="${rg}">${rg}</button>`).join("")}
@@ -559,9 +655,7 @@ async function pageGP(token) {
     <div class="grid-4 metric-row" id="gp-metrics"></div>
     <div class="panel"><div class="body"><div class="chart" id="gp-chart"><div class="loading">LOADING…</div></div></div></div>`;
 
-  $("#gp-ticker").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") nav("GP", e.target.value.trim().toUpperCase());
-  });
+  bindTickerSuggest("gp-ticker", (t) => nav("GP", t));
   document.querySelectorAll("[data-range]").forEach((b) =>
     b.addEventListener("click", () => { state.gpRange = b.dataset.range; render(); }));
 
@@ -660,17 +754,14 @@ async function pageDES(token) {
 async function pageVOL(token) {
   main.innerHTML = `
     <div class="panel"><div class="body form-row">
-      <div class="field"><label>SECURITY</label>
-        <input id="vol-ticker" value="${esc(state.ticker)}" style="width:170px"></div>
+      ${secField("vol-ticker", state.ticker)}
       <span style="color:var(--muted);font-size:11px;padding-bottom:8px">
         REALIZED (21D / 63D ROLLING) + GARCH(1,1) ONE-DAY-AHEAD FORECAST — 2Y DAILY DATA, NO LOOK-AHEAD</span>
     </div></div>
     <div class="grid-4 metric-row" id="vol-metrics"></div>
     <div class="panel"><div class="body"><div class="chart" id="vol-chart"><div class="loading">FITTING ROLLING GARCH(1,1)…</div></div></div></div>`;
 
-  $("#vol-ticker").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") nav("VOL", e.target.value.trim().toUpperCase());
-  });
+  bindTickerSuggest("vol-ticker", (t) => nav("VOL", t));
 
   try {
     const d = await api(`/api/vol?ticker=${encodeURIComponent(state.ticker)}&garch=true`);
@@ -712,8 +803,7 @@ async function pageIV(token) {
   const expParam = state.ivExpiry ? `&expiry=${encodeURIComponent(state.ivExpiry)}` : "";
   main.innerHTML = `
     <div class="panel"><div class="body form-row">
-      <div class="field"><label>SECURITY</label>
-        <input id="iv-ticker" value="${esc(state.ticker)}" style="width:170px"></div>
+      ${secField("iv-ticker", state.ticker)}
       <div class="field"><label>EXPIRY</label>
         <select id="iv-expiry"><option>LOADING…</option></select></div>
       <span style="color:var(--muted);font-size:11px;padding-bottom:8px">
@@ -728,12 +818,7 @@ async function pageIV(token) {
     <div class="panel"><div class="body"><div class="chart" id="iv-hist"><div class="loading">REALIZED vs GARCH…</div></div></div></div>
     <div id="iv-note"></div>`;
 
-  $("#iv-ticker").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      state.ivExpiry = null;
-      nav("IV", e.target.value.trim().toUpperCase());
-    }
-  });
+  bindTickerSuggest("iv-ticker", (t) => { state.ivExpiry = null; nav("IV", t); });
 
   try {
     const d = await api(`/api/iv?ticker=${encodeURIComponent(state.ticker)}${expParam}&garch=true`);
@@ -836,8 +921,7 @@ async function pageN(token) {
     <div class="panel"><div class="ttl"><span>NEWS ROUTER</span>
       <span class="sub">CLICK A HEADLINE OR TICKER CHIP → GP</span></div>
     <div class="body form-row">
-      <div class="field"><label>SECURITY</label>
-        <input id="n-ticker" value="${esc(state.ticker)}" style="width:150px"></div>
+      ${secField("n-ticker", state.ticker)}
       <div class="field"><label>KEYWORD</label>
         <input id="n-q" value="${esc(state.newsQ || "")}" placeholder="fed, earnings, rbi…" style="width:180px"></div>
       <div class="field"><label>TICKER FILTER</label>
@@ -855,7 +939,7 @@ async function pageN(token) {
     state.newsFilter = ($("#n-filter").value || "").trim().toUpperCase();
     render();
   };
-  $("#n-ticker").addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); });
+  bindTickerSuggest("n-ticker", () => apply());
   $("#n-q").addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); });
   $("#n-filter").addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); });
   $("#n-run").addEventListener("click", apply);
@@ -1076,7 +1160,7 @@ function pageHB(token) {
     <div class="panel"><div class="ttl"><span>HISTORICAL DELTA-HEDGE BACKTEST</span>
       <span class="sub">SHORT ONE OPTION, HEDGE WITH THE UNDERLYING — STATIC vs ROLLING vs GARCH VOL</span></div>
     <div class="body form-row">
-      ${f("hb-ticker", "SECURITY", state.ticker, 'style="width:150px"')}
+      ${secField("hb-ticker", state.ticker)}
       <div class="field"><label>SCENARIO</label>
         <select id="hb-scenario">${Object.keys(SCENARIOS).map((s) =>
           `<option>${s}</option>`).join("")}</select></div>
@@ -1096,6 +1180,7 @@ function pageHB(token) {
     $("#hb-start").value = SCENARIOS[e.target.value];
   });
   $("#hb-scenario").value = "SVB / REGIONAL BANK CRISIS (2023)";
+  bindTickerSuggest("hb-ticker", null);
 
   $("#hb-run").addEventListener("click", async () => {
     const token2 = state.renderToken;

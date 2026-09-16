@@ -71,6 +71,18 @@ def test_watchlist_search_bad_section(client):
     assert r.status_code == 400
 
 
+def test_symbols_search_prefix(client, monkeypatch):
+    monkeypatch.setattr(terminal.md, "search_symbols_all", lambda q, limit=12: [
+        {"ticker": "NVDA", "name": "NVIDIA", "exchange": "NASDAQ", "type": "EQUITY"},
+        {"ticker": "NFLX", "name": "NETFLIX", "exchange": "NASDAQ", "type": "EQUITY"},
+    ])
+    r = client.get("/api/symbols/search", params={"q": "n"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body[0]["ticker"] == "NVDA"
+    assert body[0]["name"] == "NVIDIA"
+
+
 def test_news_feed_bad_scope(client):
     r = client.get("/api/news/feed", params={"scope": "mars"})
     assert r.status_code == 400

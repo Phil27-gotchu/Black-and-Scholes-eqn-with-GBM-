@@ -323,23 +323,40 @@ def _catalog(section: str) -> list:
     return out
 
 
+def _rank_symbol_hit(query: str, ticker: str, name: str):
+    """0 = ticker prefix (N → NVDA), 1 = name prefix, 2 = substring."""
+    q = query.strip().lower()
+    t = ticker.lower()
+    n = (name or "").lower()
+    bare = t.replace(".bo", "").replace(".ns", "").lstrip("^")
+    if t.startswith(q) or bare.startswith(q):
+        return 0
+    if n.startswith(q):
+        return 1
+    if q in t or q in n or q in bare:
+        return 2
+    return None
+
+
 def _local_symbol_search(query: str, section: str, limit: int = 8) -> list:
     q = query.strip().lower()
     if not q:
         return []
     hits = []
     for ticker, name in _catalog(section):
-        blob = f"{ticker} {name}".lower()
-        if q in blob or ticker.lower().startswith(q):
-            hits.append({
-                "ticker": ticker,
-                "name": name,
-                "exchange": "NASDAQ" if section == "nasdaq" else "BSE / NSE",
-                "type": "EQUITY",
-            })
-        if len(hits) >= limit:
-            break
-    return hits
+        rank = _rank_symbol_hit(q, ticker, name)
+        if rank is None:
+            continue
+        if len(q) == 1 and rank > 1:
+            continue
+        hits.append((rank, ticker, {
+            "ticker": ticker,
+            "name": name,
+            "exchange": "NASDAQ" if section == "nasdaq" else "BSE / NSE",
+            "type": "EQUITY",
+        }))
+    hits.sort(key=lambda x: (x[0], x[1]))
+    return [h[2] for h in hits[:limit]]
 
 
 def _filter_search_quotes(quotes: list, section: str) -> list:
@@ -386,12 +403,13 @@ def search_symbols(query: str, section: str = "nasdaq", limit: int = 8) -> list:
         return []
     local = _local_symbol_search(q, section, limit=limit)
     remote = []
-    try:
-        from yfinance import Search
-        result = Search(q, max_results=12, news_count=0, raise_errors=False)
-        remote = _filter_search_quotes(result.quotes or [], section)
-    except Exception:
-        remote = []
+    if len(q) >= 2:
+        try:
+            from yfinance import Search
+            result = Search(q, max_results=12, news_count=0, raise_errors=False)
+            remote = _filter_search_quotes(result.quotes or [], section)
+        except Exception:
+            remote = []
     merged, seen = [], set()
     for row in local + remote:
         if row["ticker"] in seen:
@@ -401,6 +419,28 @@ def search_symbols(query: str, section: str = "nasdaq", limit: int = 8) -> list:
         if len(merged) >= limit:
             break
     return merged
+
+
+def search_symbols_all(query: str, limit: int = 12) -> list:
+    """NASDAQ + BSE autocomplete. Prefix matches first: N → NVDA [NVIDIA]."""
+    q = (query or "").strip()
+    if len(q) < 1:
+        return []
+    seen, ranked = set(), []
+    for section in ("nasdaq", "bse"):
+        for row in search_symbols(q, section=section, limit=limit):
+            t = row["ticker"]
+            if t in seen:
+                continue
+            seen.add(t)
+            rank = _rank_symbol_hit(q, t, row.get("name") or "")
+            if rank is None:
+                continue
+            if len(q) == 1 and rank > 1:
+                continue
+            ranked.append((rank, t, row))
+    ranked.sort(key=lambda x: (x[0], x[1]))
+    return [r[2] for r in ranked[:limit]]
 
 
 def tape_tickers() -> list:

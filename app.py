@@ -12,6 +12,7 @@ Serves the single-page terminal frontend from /static and a JSON API:
     /api/profile            company fundamentals
     /api/news               headlines for one ticker
     /api/news/feed          filtered tape (keyword, ticker, india / mega-cap)
+    /api/symbols/search     ticker + name autocomplete (NASDAQ + BSE)
     /api/vol                realized + GARCH volatility series
     /api/ov                 Black-Scholes valuation + greek curves
     /api/iv                 implied vol smile, term structure, vs realized/GARCH
@@ -125,6 +126,11 @@ def api_watchlist_search(q: str, section: str = "nasdaq"):
     if section not in ("nasdaq", "bse"):
         raise HTTPException(400, "section must be 'nasdaq' or 'bse'")
     return md.search_symbols(q, section=section, limit=8)
+
+
+@app.get("/api/symbols/search")
+def api_symbols_search(q: str, limit: int = 12):
+    return md.search_symbols_all(q, limit=min(max(limit, 1), 20))
 
 
 @app.get("/api/tape")
