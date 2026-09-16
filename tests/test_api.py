@@ -66,6 +66,26 @@ def test_watchlist_bad_section(client):
     assert r.status_code == 400
 
 
+def test_watchlist_search_bad_section(client):
+    r = client.get("/api/watchlist/search", params={"q": "apple", "section": "lse"})
+    assert r.status_code == 400
+
+
+def test_news_feed_bad_scope(client):
+    r = client.get("/api/news/feed", params={"scope": "mars"})
+    assert r.status_code == 400
+
+
+def test_news_feed_filters(client, monkeypatch):
+    monkeypatch.setattr(terminal.md, "get_news_feed", lambda **k: [
+        {"title": "Apple", "tickers": ["AAPL"], "primary": "AAPL", "source": "AAPL",
+         "provider": "X", "when": "", "link": ""}
+    ])
+    r = client.get("/api/news/feed", params={"scope": "mega", "q": "apple"})
+    assert r.status_code == 200
+    assert r.json()[0]["primary"] == "AAPL"
+
+
 # ------------------------------------------------------------
 # Black-Scholes / GBM / Monte Carlo endpoints
 # ------------------------------------------------------------

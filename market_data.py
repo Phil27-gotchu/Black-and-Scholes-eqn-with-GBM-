@@ -7,6 +7,7 @@ Covers two market universes: NASDAQ (US) and BSE (India, '.BO' suffix on Yahoo).
 
 import functools
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -89,6 +90,117 @@ BSE_WATCHLIST = [
 ]
 
 ALL_NAMES = dict(NASDAQ_INDICES + NASDAQ_WATCHLIST + BSE_INDICES + BSE_WATCHLIST)
+
+MEGA_NEWS_TICKERS = [t for t, _ in NASDAQ_WATCHLIST] + ["SPY", "QQQ"]
+INDIA_NEWS_TICKERS = [t for t, _ in BSE_WATCHLIST] + ["^BSESN", "^NSEI"]
+
+_NEWS_EXTRA_ALIASES = [
+    ("apple", "AAPL"), ("iphone", "AAPL"), ("nvidia", "NVDA"),
+    ("microsoft", "MSFT"), ("google", "GOOGL"), ("alphabet", "GOOGL"),
+    ("amazon", "AMZN"), ("facebook", "META"), ("meta platforms", "META"),
+    ("tesla", "TSLA"), ("netflix", "NFLX"), ("broadcom", "AVGO"),
+    ("intel", "INTC"), ("qualcomm", "QCOM"),
+    ("reliance", "RELIANCE.BO"), ("infosys", "INFY.BO"),
+    ("hdfc bank", "HDFCBANK.BO"), ("icici", "ICICIBANK.BO"),
+    ("state bank of india", "SBIN.BO"), ("sbi", "SBIN.BO"),
+    ("bharti", "BHARTIARTL.BO"), ("airtel", "BHARTIARTL.BO"),
+    ("tata motors", "TATAMOTORS.BO"), ("tata consultancy", "TCS.BO"),
+    ("hindustan unilever", "HINDUNILVR.BO"), ("larsen", "LT.BO"),
+    ("sensex", "^BSESN"), ("nifty", "^NSEI"), ("nasdaq", "^IXIC"),
+    ("s&p 500", "^GSPC"), ("s&p500", "^GSPC"),
+]
+
+
+def _news_alias_table():
+    """Longer phrases first so 'TATA MOTORS' wins over a generic 'TATA'."""
+    rows = []
+    for t, n in NASDAQ_WATCHLIST + NASDAQ_INDICES + BSE_WATCHLIST + BSE_INDICES:
+        rows.append((t.lower(), t))
+        rows.append((n.lower(), t))
+        bare = t.lower().replace(".bo", "").replace(".ns", "").lstrip("^")
+        if len(bare) >= 2:
+            rows.append((bare, t))
+    rows.extend(_NEWS_EXTRA_ALIASES)
+    first = {}
+    for t, n in NASDAQ_WATCHLIST + BSE_WATCHLIST:
+        w = n.split()[0].lower()
+        if len(w) >= 4:
+            first.setdefault(w, set()).add(t)
+    for w, tickers in first.items():
+        if len(tickers) == 1:
+            rows.append((w, next(iter(tickers))))
+    # unique by alias, last extra aliases can override catalog
+    by_alias = {}
+    for alias, ticker in rows:
+        by_alias[alias] = ticker
+    return sorted(by_alias.items(), key=lambda kv: len(kv[0]), reverse=True)
+
+
+_NEWS_ALIASES = _news_alias_table()
+
+
+def tag_tickers(title: str) -> list:
+    """Tickers mentioned in a headline (name or symbol)."""
+    text = f" {title.lower()} "
+    found, seen = [], set()
+    for alias, ticker in _NEWS_ALIASES:
+        if ticker in seen:
+            continue
+        if re.search(r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])", text):
+            seen.add(ticker)
+            found.append(ticker)
+    return found
+
+
+def _is_india_ticker(t: str) -> bool:
+    t = (t or "").upper()
+    return t.endswith(".BO") or t.endswith(".NS") or t in {"^BSESN", "^NSEI", "INR=X"}
+
+
+def _is_mega_ticker(t: str) -> bool:
+    return (t or "").upper() in {x.upper() for x in MEGA_NEWS_TICKERS} | {
+        "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "SPY", "QQQ",
+    }
+
+
+def filter_news_items(items, query="", ticker="", scope="all"):
+    q = (query or "").strip().lower()
+    want = (ticker or "").strip().upper()
+    out = []
+    for it in items:
+        title = it.get("title") or ""
+        blob = f"{title} {it.get('provider') or ''}".lower()
+        if q and q not in blob:
+            continue
+        tags = it.get("tickers") or []
+        src = (it.get("source") or "").upper()
+        primary = (it.get("primary") or "").upper()
+        if want and want not in {x.upper() for x in tags} and want != src:
+            continue
+        if scope == "india":
+            universe = tags + [src, primary]
+            if not any(_is_india_ticker(x) for x in universe):
+                continue
+        elif scope == "mega":
+            universe = tags + [src, primary]
+            if not any(_is_mega_ticker(x) for x in universe):
+                continue
+        elif scope == "name" and want:
+            if want not in {x.upper() for x in tags} and want != src:
+                continue
+        out.append(it)
+    return out
+
+
+def _decorate_news_item(item: dict, source: str) -> dict:
+    tags = tag_tickers(item.get("title") or "")
+    primary = tags[0] if tags else source
+    return {
+        **item,
+        "source": source,
+        "tickers": tags,
+        "primary": primary,
+    }
 
 
 # ------------------------------------------------------------
@@ -188,6 +300,107 @@ def remove_watchlist_ticker(section: str, ticker: str) -> dict:
         return {"ok": False, "msg": f"{t} is not in the watchlist."}
     _save_watchlists(data)
     return {"ok": True, "ticker": t}
+
+
+US_EXCHANGES = {
+    "NMS", "NYQ", "NGM", "NCM", "ASE", "PCX", "BTS", "NYSE", "NASDAQ",
+    "NYSEARCA", "NYSE ARCA", "AMEX", "BATS", "CBOE BZX", "NYSE AMERICAN",
+}
+IN_EXCHANGES = {"NSI", "BSE", "NSE", "BOM", "BOMBAY"}
+
+
+def _catalog(section: str) -> list:
+    if section == "nasdaq":
+        pairs = NASDAQ_INDICES + NASDAQ_WATCHLIST
+    else:
+        pairs = BSE_INDICES + BSE_WATCHLIST
+    extra = [(w["ticker"], w["name"]) for w in load_watchlists().get(section, [])]
+    seen, out = set(), []
+    for t, n in list(pairs) + extra:
+        if t not in seen:
+            seen.add(t)
+            out.append((t, n))
+    return out
+
+
+def _local_symbol_search(query: str, section: str, limit: int = 8) -> list:
+    q = query.strip().lower()
+    if not q:
+        return []
+    hits = []
+    for ticker, name in _catalog(section):
+        blob = f"{ticker} {name}".lower()
+        if q in blob or ticker.lower().startswith(q):
+            hits.append({
+                "ticker": ticker,
+                "name": name,
+                "exchange": "NASDAQ" if section == "nasdaq" else "BSE / NSE",
+                "type": "EQUITY",
+            })
+        if len(hits) >= limit:
+            break
+    return hits
+
+
+def _filter_search_quotes(quotes: list, section: str) -> list:
+    """Keep cash equities/ETFs on the section's home market."""
+    out, seen = [], set()
+    for q in quotes or []:
+        symbol = (q.get("symbol") or "").upper()
+        qtype = (q.get("quoteType") or "").upper()
+        exch = (q.get("exchange") or "").upper()
+        disp = (q.get("exchDisp") or "").upper()
+        name = q.get("shortname") or q.get("longname") or symbol
+        if not symbol or qtype in {"FUTURE", "OPTION", "CRYPTOCURRENCY", "MUTUALFUND"}:
+            continue
+        if qtype not in {"EQUITY", "ETF", "INDEX", "ECNQUOTE"}:
+            continue
+        if section == "nasdaq":
+            if "." in symbol or symbol.endswith("=F"):
+                continue
+            if exch not in US_EXCHANGES and disp not in US_EXCHANGES:
+                continue
+        else:
+            indian = symbol.endswith(".NS") or symbol.endswith(".BO")
+            if not indian and exch not in IN_EXCHANGES and disp not in IN_EXCHANGES:
+                continue
+            if symbol.endswith(".NS"):
+                symbol = symbol[:-3] + ".BO"
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        out.append({
+            "ticker": symbol,
+            "name": str(name).upper()[:40],
+            "exchange": q.get("exchDisp") or q.get("exchange") or "",
+            "type": qtype,
+        })
+    return out
+
+
+@ttl_cache(60)
+def search_symbols(query: str, section: str = "nasdaq", limit: int = 8) -> list:
+    """Autocomplete: local catalog plus Yahoo Finance search by name or ticker."""
+    q = (query or "").strip()
+    if len(q) < 1 or section not in ("nasdaq", "bse"):
+        return []
+    local = _local_symbol_search(q, section, limit=limit)
+    remote = []
+    try:
+        from yfinance import Search
+        result = Search(q, max_results=12, news_count=0, raise_errors=False)
+        remote = _filter_search_quotes(result.quotes or [], section)
+    except Exception:
+        remote = []
+    merged, seen = [], set()
+    for row in local + remote:
+        if row["ticker"] in seen:
+            continue
+        seen.add(row["ticker"])
+        merged.append(row)
+        if len(merged) >= limit:
+            break
+    return merged
 
 
 def tape_tickers() -> list:
@@ -309,7 +522,7 @@ def get_news(ticker: str, limit: int = 10) -> list:
     except Exception:
         return []
     out = []
-    for it in items[:limit]:
+    for it in items[: max(limit * 2, 12)]:
         c = it.get("content", it)  # new schema nests under 'content'
         title = c.get("title")
         if not title:
@@ -323,9 +536,47 @@ def get_news(ticker: str, limit: int = 10) -> list:
             provider = c["provider"].get("displayName", "")
         provider = provider or it.get("publisher", "")
         when = c.get("pubDate") or ""
-        out.append(dict(title=title, link=link, provider=provider,
-                        when=str(when)[:16].replace("T", " ")))
+        raw = dict(title=title, link=link, provider=provider,
+                   when=str(when)[:16].replace("T", " "))
+        out.append(_decorate_news_item(raw, ticker.upper()))
+        if len(out) >= limit:
+            break
     return out
+
+
+def get_news_feed(scope: str = "all", query: str = "", ticker: str = "",
+                  limit: int = 40) -> list:
+    """Pull a cross-name headline tape, tag names, then filter like a router."""
+    scope = (scope or "all").lower()
+    if scope not in ("all", "india", "mega", "name"):
+        scope = "all"
+    focus = (ticker or "").strip().upper()
+    if scope == "mega":
+        sources = list(MEGA_NEWS_TICKERS)
+    elif scope == "india":
+        sources = list(INDIA_NEWS_TICKERS)
+    elif scope == "name":
+        sources = [focus] if focus else list(MEGA_NEWS_TICKERS[:4])
+    else:
+        sources = MEGA_NEWS_TICKERS[:8] + INDIA_NEWS_TICKERS[:8]
+    if focus and focus not in sources:
+        sources = [focus] + sources
+
+    bundled, seen = [], set()
+    per = 8 if scope == "name" else 6
+    for src in sources:
+        for item in get_news(src, limit=per):
+            key = (item.get("title") or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            bundled.append(item)
+
+    if scope == "name" and focus:
+        filtered = filter_news_items(bundled, query=query, ticker=focus, scope="name")
+    else:
+        filtered = filter_news_items(bundled, query=query, ticker=focus, scope=scope)
+    return filtered[:limit]
 
 
 def fmt_big(x):

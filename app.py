@@ -10,7 +10,8 @@ Serves the single-page terminal frontend from /static and a JSON API:
     /api/tape               ticker-tape quotes
     /api/history            OHLCV history for any Yahoo symbol
     /api/profile            company fundamentals
-    /api/news               headlines
+    /api/news               headlines for one ticker
+    /api/news/feed          filtered tape (keyword, ticker, india / mega-cap)
     /api/vol                realized + GARCH volatility series
     /api/ov                 Black-Scholes valuation + greek curves
     /api/iv                 implied vol smile, term structure, vs realized/GARCH
@@ -119,6 +120,13 @@ def api_watchlist_remove(section: str, ticker: str):
     return result
 
 
+@app.get("/api/watchlist/search")
+def api_watchlist_search(q: str, section: str = "nasdaq"):
+    if section not in ("nasdaq", "bse"):
+        raise HTTPException(400, "section must be 'nasdaq' or 'bse'")
+    return md.search_symbols(q, section=section, limit=8)
+
+
 @app.get("/api/tape")
 def api_tape():
     return md.get_quotes(tuple(md.tape_tickers()))
@@ -175,6 +183,13 @@ def api_profile(ticker: str):
 @app.get("/api/news")
 def api_news(ticker: str, limit: int = 10):
     return md.get_news(ticker.upper(), limit=limit)
+
+
+@app.get("/api/news/feed")
+def api_news_feed(scope: str = "all", q: str = "", ticker: str = "", limit: int = 40):
+    if scope not in ("all", "india", "mega", "name"):
+        raise HTTPException(400, "scope must be all, india, mega, or name")
+    return md.get_news_feed(scope=scope, query=q, ticker=ticker, limit=min(limit, 60))
 
 
 @app.get("/api/vol")

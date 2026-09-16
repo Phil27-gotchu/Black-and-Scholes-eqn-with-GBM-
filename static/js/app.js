@@ -13,6 +13,9 @@ const state = {
   gpRange: "1Y",
   theme: localStorage.getItem("bns-theme") || "dark",
   renderToken: 0,
+  newsScope: "all",
+  newsQ: "",
+  newsFilter: "",
 };
 
 const FUNCTIONS = {
@@ -209,6 +212,8 @@ for (const [code, label] of Object.entries(FUNCTIONS)) {
 main.addEventListener("click", (e) => {
   const add = e.target.closest("[data-wl-add]");
   if (add) { wlAdd(add.dataset.wlAdd); return; }
+  const pick = e.target.closest("[data-wl-pick]");
+  if (pick) { wlPick(pick.dataset.wlPick, pick.dataset.t); return; }
   const rm = e.target.closest("[data-wl-rm]");
   if (rm) { wlRemove(rm.dataset.wlRm, rm.dataset.t); return; }
   const td = e.target.closest("[data-nav-ticker]");
@@ -254,12 +259,15 @@ function quoteTable(rows, title, sub = "", section = null) {
       <td class="${chgCls(q.chg)}">${q.chg >= 0 ? "+" : ""}${fmt(q.chg_pct)}%</td>${rmTd(q)}</tr>`;
   }
   body += `</table>`;
-  const subHTML = section
-    ? `<input class="wl-in" id="wl-in-${esc(section)}" maxlength="14"
-         placeholder="${section === "bse" ? "ADD SYMBOL (e.g. TITAN)" : "ADD SYMBOL (e.g. PLTR)"}">
-       <button class="wl-btn" data-wl-add="${esc(section)}">+ ADD</button>`
-    : sub;
-  return panel(title, body, subHTML);
+  const search = section
+    ? `<div class="wl-search">
+         <input class="wl-in" id="wl-in-${esc(section)}" maxlength="64" autocomplete="off"
+           placeholder="${section === "bse" ? "SEARCH NAME OR TICKER — e.g. RELIANCE" : "SEARCH NAME OR TICKER — e.g. APPLE"}">
+         <button class="wl-btn" data-wl-add="${esc(section)}">+ ADD</button>
+         <div class="wl-drop" id="wl-drop-${esc(section)}" hidden></div>
+       </div>`
+    : "";
+  return panel(title, search + body, section ? "" : sub);
 }
 
 /* --- watchlist add / remove --- */
@@ -273,6 +281,64 @@ async function wlPost(action, section, ticker) {
     throw new Error(msg);
   }
   return r.json();
+}
+
+const wlSuggest = { section: null, items: [], hi: -1, timer: null };
+
+function wlDropEl(section) { return $(`#wl-drop-${section}`); }
+
+function wlHideDrop(section) {
+  const drop = section ? wlDropEl(section) : document.querySelector(".wl-drop");
+  if (drop) { drop.hidden = true; drop.innerHTML = ""; }
+  wlSuggest.items = [];
+  wlSuggest.hi = -1;
+}
+
+function wlPaintDrop(section) {
+  const drop = wlDropEl(section);
+  if (!drop) return;
+  if (!wlSuggest.items.length) {
+    drop.hidden = true;
+    drop.innerHTML = `<div class="wl-empty">NO MATCHES</div>`;
+    drop.hidden = false;
+    return;
+  }
+  drop.innerHTML = wlSuggest.items.map((it, i) =>
+    `<button type="button" class="wl-opt${i === wlSuggest.hi ? " active" : ""}"
+       data-wl-pick="${esc(section)}" data-t="${esc(it.ticker)}">
+       <span class="tk">${esc(it.ticker)}</span>
+       <span class="nm">${esc(it.name)}</span>
+       <span class="ex">${esc(it.exchange || "")}</span>
+     </button>`).join("");
+  drop.hidden = false;
+}
+
+async function wlSearch(section) {
+  const inp = $(`#wl-in-${section}`);
+  const q = (inp?.value || "").trim();
+  if (q.length < 1) { wlHideDrop(section); return; }
+  try {
+    const items = await api(`/api/watchlist/search?q=${encodeURIComponent(q)}&section=${encodeURIComponent(section)}`);
+    if ($(`#wl-in-${section}`)?.value.trim() !== q) return;
+    wlSuggest.section = section;
+    wlSuggest.items = items;
+    wlSuggest.hi = items.length ? 0 : -1;
+    wlPaintDrop(section);
+  } catch (_) {
+    wlHideDrop(section);
+  }
+}
+
+function wlScheduleSearch(section) {
+  clearTimeout(wlSuggest.timer);
+  wlSuggest.timer = setTimeout(() => wlSearch(section), 220);
+}
+
+function wlPick(section, ticker) {
+  const inp = $(`#wl-in-${section}`);
+  if (inp) inp.value = ticker;
+  wlHideDrop(section);
+  wlAdd(section);
 }
 
 async function wlAdd(section) {
@@ -303,10 +369,34 @@ async function wlRemove(section, ticker) {
   }
 }
 
+main.addEventListener("input", (e) => {
+  if (!e.target.classList.contains("wl-in")) return;
+  wlScheduleSearch(e.target.id.replace("wl-in-", ""));
+});
+
 main.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && e.target.id && e.target.id.startsWith("wl-in-")) {
-    wlAdd(e.target.id.replace("wl-in-", ""));
+  if (!e.target.id || !e.target.id.startsWith("wl-in-")) return;
+  const section = e.target.id.replace("wl-in-", "");
+  const n = wlSuggest.items.length;
+  if (e.key === "ArrowDown" && n) {
+    e.preventDefault();
+    wlSuggest.hi = (wlSuggest.hi + 1) % n;
+    wlPaintDrop(section);
+  } else if (e.key === "ArrowUp" && n) {
+    e.preventDefault();
+    wlSuggest.hi = (wlSuggest.hi - 1 + n) % n;
+    wlPaintDrop(section);
+  } else if (e.key === "Escape") {
+    wlHideDrop(section);
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (n && wlSuggest.hi >= 0) wlPick(section, wlSuggest.items[wlSuggest.hi].ticker);
+    else wlAdd(section);
   }
+});
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".wl-search")) wlHideDrop(wlSuggest.section);
 });
 
 function panel(title, bodyHTML, sub = "", pad = false) {
@@ -340,11 +430,23 @@ function moversHTML(watchlist) {
 }
 
 function newsHTML(items) {
-  if (!items.length) return `<div class="news-item"><span class="hl">NO HEADLINES AVAILABLE</span></div>`;
-  return items.map((n) => `<div class="news-item">
-      ${n.link ? `<a class="hl" href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a>`
-               : `<span class="hl">${esc(n.title)}</span>`}
-      <div class="src">${esc(n.provider)} · ${esc(n.when)}</div></div>`).join("");
+  if (!items.length) return `<div class="news-item"><span class="hl">NO HEADLINES MATCH THIS FILTER</span></div>`;
+  return items.map((n) => {
+    const primary = n.primary || (n.tickers && n.tickers[0]) || "";
+    const chips = (n.tickers || []).map((t) =>
+      `<button type="button" class="news-tk" data-nav-ticker="${esc(t)}" title="OPEN ${esc(t)} GP">${esc(t)}</button>`
+    ).join("");
+    const title = primary
+      ? `<span class="hl news-route" data-nav-ticker="${esc(primary)}" title="OPEN ${esc(primary)} GP">${esc(n.title)}</span>`
+      : `<span class="hl">${esc(n.title)}</span>`;
+    const ext = n.link
+      ? `<a class="news-ext" href="${esc(n.link)}" target="_blank" rel="noopener">SOURCE</a>`
+      : "";
+    return `<div class="news-item">
+      ${title}
+      <div class="src">${chips}${chips ? " · " : ""}${esc(n.provider)} · ${esc(n.when)} ${ext}</div>
+    </div>`;
+  }).join("");
 }
 
 async function drawBenchmark(elId, ticker, range = "6M", title) {
@@ -723,30 +825,70 @@ async function pageIV(token) {
 /* ---------------- N news ---------------- */
 
 async function pageN(token) {
+  const scopes = [
+    ["all", "ALL"],
+    ["mega", "MEGA-CAP"],
+    ["india", "INDIA"],
+    ["name", "THIS NAME"],
+  ];
+  const scope = state.newsScope || "all";
   main.innerHTML = `
-    <div class="panel"><div class="body form-row">
+    <div class="panel"><div class="ttl"><span>NEWS ROUTER</span>
+      <span class="sub">CLICK A HEADLINE OR TICKER CHIP → GP</span></div>
+    <div class="body form-row">
       <div class="field"><label>SECURITY</label>
-        <input id="n-ticker" value="${esc(state.ticker)}" style="width:170px"></div>
+        <input id="n-ticker" value="${esc(state.ticker)}" style="width:150px"></div>
+      <div class="field"><label>KEYWORD</label>
+        <input id="n-q" value="${esc(state.newsQ || "")}" placeholder="fed, earnings, rbi…" style="width:180px"></div>
+      <div class="field"><label>TICKER FILTER</label>
+        <input id="n-filter" value="${esc(state.newsFilter || "")}" placeholder="NVDA OR RELIANCE.BO" style="width:160px"></div>
+      <div class="field"><label>SCOPE</label>
+        <div class="range-btns">${scopes.map(([id, lab]) =>
+          `<button class="fkey${scope === id ? " active" : ""}" data-news-scope="${id}">${lab}</button>`).join("")}</div></div>
+      <button class="btn" id="n-run">SCREEN</button>
     </div></div>
-    <div class="grid-2">
-      <div id="n-sec">${panel("LOADING…", "")}</div>
-      <div id="n-mkt">${panel("LOADING…", "")}</div>
-    </div>`;
-  $("#n-ticker").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") nav("N", e.target.value.trim().toUpperCase());
+    <div id="n-tape">${panel("LOADING TAPE…", `<div class="loading">PULLING HEADLINES…</div>`)}</div>`;
+
+  const apply = () => {
+    state.ticker = ($("#n-ticker").value || state.ticker).trim().toUpperCase();
+    state.newsQ = ($("#n-q").value || "").trim();
+    state.newsFilter = ($("#n-filter").value || "").trim().toUpperCase();
+    render();
+  };
+  $("#n-ticker").addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); });
+  $("#n-q").addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); });
+  $("#n-filter").addEventListener("keydown", (e) => { if (e.key === "Enter") apply(); });
+  $("#n-run").addEventListener("click", apply);
+  document.querySelectorAll("[data-news-scope]").forEach((b) => {
+    b.addEventListener("click", () => { state.newsScope = b.dataset.newsScope; apply(); });
   });
-  const isIndia = state.ticker.endsWith(".BO") || state.ticker.endsWith(".NS") || state.ticker === "^BSESN";
-  const broad = isIndia ? "RELIANCE.BO" : "SPY";
+
+  const params = new URLSearchParams({
+    scope,
+    q: state.newsQ || "",
+    ticker: scope === "name" ? state.ticker : (state.newsFilter || ""),
+    limit: "40",
+  });
   try {
-    const [sec, mkt] = await Promise.all([
-      api(`/api/news?ticker=${encodeURIComponent(state.ticker)}&limit=12`),
-      api(`/api/news?ticker=${encodeURIComponent(broad)}&limit=12`),
-    ]);
+    const items = await api(`/api/news/feed?${params}`);
     if (token !== state.renderToken) return;
-    $("#n-sec").innerHTML = panel(`${esc(state.ticker)} HEADLINES`, newsHTML(sec));
-    $("#n-mkt").innerHTML = panel(isIndia ? "INDIA MARKET" : "BROAD MARKET (SPY)", newsHTML(mkt));
+    const label = {
+      all: "ALL MARKETS",
+      mega: "MEGA-CAP (US)",
+      india: "INDIA",
+      name: state.ticker,
+    }[scope];
+    const extra = [
+      state.newsQ ? `KEYWORD “${state.newsQ.toUpperCase()}”` : "",
+      state.newsFilter && scope !== "name" ? `TICKER ${state.newsFilter}` : "",
+    ].filter(Boolean).join(" · ");
+    $("#n-tape").innerHTML = panel(
+      `${label} — ${items.length} HEADLINES`,
+      newsHTML(items),
+      extra || "CLICK TITLE TO LOAD THE CHART"
+    );
   } catch (e) {
-    if (token === state.renderToken) main.innerHTML += errBox(e);
+    if (token === state.renderToken) $("#n-tape").innerHTML = errBox(e);
   }
 }
 
@@ -1035,7 +1177,7 @@ function pageHELP() {
     ["DES <TICKER>", "SECURITY PROFILE — FUNDAMENTALS, DESCRIPTION, HEADLINES"],
     ["VOL <TICKER>", "VOLATILITY MONITOR — REALIZED 21D/63D + GARCH(1,1) FORECAST"],
     ["IV <TICKER>", "IMPLIED VOL — SMILE / SKEW, TERM STRUCTURE, vs REALIZED & GARCH"],
-    ["N <TICKER>", "NEWS HEADLINES — SECURITY + BROAD MARKET"],
+    ["N <TICKER>", "NEWS ROUTER — KEYWORD / TICKER / INDIA / MEGA-CAP; CLICK HEADLINE → GP"],
     ["OV", "OPTION VALUATION — BLACK-SCHOLES PRICE & GREEK CURVES"],
     ["GBM", "GEOMETRIC BROWNIAN MOTION PATH SIMULATOR"],
     ["MC", "MONTE CARLO OPTION PRICER VS CLOSED FORM"],

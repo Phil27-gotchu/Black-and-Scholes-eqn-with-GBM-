@@ -65,7 +65,8 @@ historical delta-hedge backtester with GARCH volatility forecasting.
   inversion of Black-Scholes on bid/ask mids, OTM smile/skew, ATM term
   structure, and live ATM IV vs realized vs GARCH (the volatility risk
   premium). Indices map to ETF chains (`^GSPC` → SPY); `.BO` names use NSE.
-- **N** — security and broad-market news.
+- **N** — news router: keyword, ticker, India vs US mega-cap scopes.
+  Click a headline or ticker chip to load that name's price chart (`GP`).
 
 **Quant lab**
 
@@ -116,7 +117,7 @@ Open <http://localhost:8000>. Interactive API docs are at
 | `DES <ticker>`  | Security profile                                      |
 | `VOL <ticker>`  | Volatility monitor (realized + GARCH forecast)        |
 | `IV <ticker>`   | Implied vol smile, term structure, vs realized/GARCH  |
-| `N <ticker>`    | News headlines                                        |
+| `N <ticker>`    | News router (keyword / India / mega-cap → GP)         |
 | `OV`            | Black-Scholes option valuation                        |
 | `GBM`           | GBM path simulator                                    |
 | `MC`            | Monte Carlo option pricer                             |
@@ -169,7 +170,7 @@ endpoints are mocked so CI stays offline and deterministic.
 | `/api/watchlist/add`, `/api/watchlist/remove` | Customize section watchlists (POST) |
 | `/api/history`   | OHLCV for any Yahoo symbol, `range=1D…MAX`     |
 | `/api/vol`       | Realized + GARCH volatility series             |
-| `/api/iv`        | Implied vol smile, term structure, vs realized |
+| `/api/news/feed` | Filtered news tape (keyword, ticker, india/mega)  |
 | `/api/ov`        | Black-Scholes greeks + curves                  |
 | `/api/mc`        | Monte Carlo pricing vs closed form             |
 | `/api/backtest`  | Delta-hedge backtest on historical windows     |
