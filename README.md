@@ -1,10 +1,9 @@
-# Bloomberg Terminal  for NASDAQ[NEWYORK STOCK EXG] AND  BSE[INDIAN STOCK EXG]
+# B&S Terminal — NASDAQ and BSE
 
-A Bloomberg-style market and derivatives terminal covering **NASDAQ (US)** and
-**BSE (India)**, built on a FastAPI backend with a dependency-free HTML/CSS/JS
-frontend. Command-driven navigation, live market data, and a quantitative
-toolkit: Black-Scholes valuation, Monte Carlo pricing, GBM simulation, and a
-historical delta-hedge backtester with GARCH volatility forecasting.
+A command-driven market and options terminal for **NASDAQ (US)** and
+**BSE (India)**. FastAPI backend, no frontend framework. The interesting
+part is the quant stack: Black-Scholes, implied vol, GARCH with no
+look-ahead, Monte Carlo, and a historical delta-hedge backtest.
 
 > Market data comes from Yahoo Finance (delayed). For research and education
 > only — not investment advice.
@@ -13,7 +12,13 @@ historical delta-hedge backtester with GARCH volatility forecasting.
 
 ## Screenshots
 
-### Market monitor — NASDAQ & BSE sections
+Files live in [`shots/`](shots/) and are linked with relative paths
+(`shots/….png`). They render in this folder and on GitHub once those files
+are on the branch you are viewing. If the GitHub copy is **private**,
+logged-out visitors will see broken images — that is access, not a missing
+file.
+
+### Market monitor — NASDAQ and BSE
 
 ![Market monitor, dark theme](shots/markets_dark.png)
 
@@ -25,7 +30,7 @@ historical delta-hedge backtester with GARCH volatility forecasting.
 
 ![Price chart for RELIANCE.BO](shots/chart_bse.png)
 
-### Volatility monitor — realized vol + GARCH(1,1) forecast
+### Volatility monitor — realized vol + GARCH(1,1)
 
 ![Volatility monitor for NVDA](shots/volatility.png)
 
@@ -35,7 +40,7 @@ historical delta-hedge backtester with GARCH volatility forecasting.
 
 ### Customizable watchlists
 
-![Custom watchlist with an added symbol](shots/watchlist_custom.png)
+![Custom watchlist](shots/watchlist_custom.png)
 
 ---
 
@@ -178,12 +183,27 @@ endpoints are mocked so CI stays offline and deterministic.
 
 ---
 
-## Notes on the hedging methodology
+## Methodology
 
-The backtester shorts one European option at the model price, then
-delta-hedges along the realized path. Every vol estimator is strictly
-causal: at step *t* it only sees prices up to *t* (rolling windows) or is
-refit on a trailing window (GARCH). Hedged P&L near zero with low variance
-indicates a good hedge; the gap between the static-vol and forecast-driven
-runs shows the value of volatility forecasting, especially in crisis
-windows where realized vol moves fast.
+Three details that are in the code, not the theme toggle.
+
+**Look-ahead.** Rolling realized vol and GARCH(1,1) are causal. At step
+*t* the forecast uses only prices `≤ t`. GARCH is refit on a trailing
+window, never the whole sample. A “GARCH hedge” that peeks at future
+returns is not a forecast.
+
+**Vega units.** `bs_price_delta_greeks` returns vega as ∂Price / ∂(1 vol
+point), i.e. per 1%. Newton–Raphson implied vol needs ∂Price / ∂σ, so the
+update is `σ ← σ − (model − market) / (vega × 100)`. Mixing those units
+makes IV explode or refuse to converge. Rho is also per 1% rate; theta is
+per trading day (`/ 252`).
+
+**Hedge P&L.** The backtester is short one European, long Δ shares,
+financed with a cash account. Each step, `cash *= exp(r·dt)` before
+rebalancing, then transaction costs hit the cash. At expiry you pay the
+option payout and unwind the stock. Hedged P&L is the final cash;
+unhedged P&L is `premium − payout`. Under the true vol, zero costs, and
+interest on cash, mean hedged P&L should sit near zero (the test that
+caught a ~0.55 bias when interest was omitted). Lower variance vs the
+naked short is the hedge working; static σ vs rolling vs GARCH is whether
+the vol forecast earns its keep in a crisis window.
