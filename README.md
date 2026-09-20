@@ -8,6 +8,9 @@ look-ahead, Monte Carlo, and a historical delta-hedge backtest.
 > Market data comes from Yahoo Finance (delayed). For research and education
 > only — not investment advice.
 
+For a full walkthrough of every feature, command, API, and module function,
+see **[PROJECT.md](PROJECT.md)**.
+
 ---
 
 ## Screenshots
