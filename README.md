@@ -18,10 +18,7 @@ Interface), and module function, see **[PROJECT.md](PROJECT.md)**.
 ## Screenshots
 
 Files live in [`shots/`](shots/) and are linked with relative paths
-(`shots/….png`). They render in this folder and on GitHub once those files
-are on the branch you are viewing. If the GitHub copy is **private**,
-logged-out visitors will see broken images — that is access, not a missing
-file.
+(`shots/….png`). 
 
 ### Market monitor — NASDAQ and BSE
 
