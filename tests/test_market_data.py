@@ -89,6 +89,68 @@ def test_local_symbol_search_prefix_ranks_ticker():
     assert "AMZN" not in tickers
 
 
+def test_ttl_cache_evicts_beyond_maxsize():
+    calls = []
+
+    @md.ttl_cache(60, maxsize=3)
+    def sq(x):
+        calls.append(x)
+        return x * x
+
+    for x in range(10):
+        sq(x)
+    assert len(sq.cache) == 3
+    sq(9)
+    assert calls.count(9) == 1
+    sq(0)
+    assert calls.count(0) == 2
+
+
+def test_ttl_cache_expires(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(md.time, "time", lambda: clock[0])
+    calls = []
+
+    @md.ttl_cache(10)
+    def f(x):
+        calls.append(x)
+        return x
+
+    f(1)
+    f(1)
+    clock[0] += 11
+    f(1)
+    assert calls == [1, 1]
+
+
+def test_symbol_search_hits_yahoo_once_for_both_markets(monkeypatch):
+    import yfinance
+
+    seen = []
+
+    class FakeSearch:
+        def __init__(self, query, **kw):
+            seen.append((query, kw.get("timeout")))
+            self.quotes = [{"symbol": "ZQXA", "shortname": "ZQX ALPHA",
+                            "quoteType": "EQUITY", "exchange": "NMS"}]
+
+    monkeypatch.setattr(yfinance, "Search", FakeSearch)
+    hits = md.search_symbols_all("zqx")
+    assert [q for q, _ in seen] == ["zqx"]
+    assert seen[0][1] == md.YAHOO_SEARCH_TIMEOUT
+    assert any(h["ticker"] == "ZQXA" for h in hits)
+
+
+def test_parallel_map_keeps_order():
+    import time as _t
+
+    def slow(x):
+        _t.sleep(0.02 * (5 - x))
+        return x * 10
+
+    assert md.parallel_map(slow, range(5)) == [0, 10, 20, 30, 40]
+
+
 def test_search_symbols_all_covers_both_markets():
     hits = md.search_symbols_all("n")
     tickers = [h["ticker"] for h in hits]

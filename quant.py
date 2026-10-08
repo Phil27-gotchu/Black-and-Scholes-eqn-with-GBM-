@@ -258,12 +258,17 @@ def simulate_gbm_paths(S0, mu, sigma, T_days, n_steps, n_paths, seed=None):
     return paths
 
 
-def monte_carlo_price(S0, K, r, sigma, T_days, n_steps, n_paths,
+def monte_carlo_price(S0, K, r, sigma, T_days, n_paths,
                       option_type="call", seed=None):
-    """Risk-neutral Monte Carlo pricing (mu = r under the risk-neutral measure)."""
-    paths = simulate_gbm_paths(S0, r, sigma, T_days, n_steps, n_paths, seed)
-    final_prices = paths[:, -1]
+    """Risk-neutral Monte Carlo pricing of a European option.
+
+    The payoff depends only on S_T, and under GBM S_T has an exact lognormal
+    law, so terminal prices are sampled in one step: O(n_paths) time and memory.
+    """
+    rng = np.random.default_rng(seed)
     T = T_days / 252
+    Z = rng.standard_normal(n_paths)
+    final_prices = S0 * np.exp((r - 0.5 * sigma**2) * T + sigma * np.sqrt(T) * Z)
     if option_type == "call":
         payoffs = np.maximum(final_prices - K, 0)
     else:
@@ -271,4 +276,4 @@ def monte_carlo_price(S0, K, r, sigma, T_days, n_steps, n_paths,
     discounted = payoffs * np.exp(-r * T)
     price = discounted.mean()
     stderr = discounted.std(ddof=1) / np.sqrt(n_paths)
-    return price, stderr, paths, final_prices, payoffs
+    return price, stderr, final_prices, payoffs

@@ -139,13 +139,19 @@ def test_gbm_mean_matches_drift():
 # ------------------------------------------------------------
 
 def test_mc_call_within_three_se_of_bs(call):
-    mc, se, *_ = quant.monte_carlo_price(100, 100, 0.04, 0.25, 63, 63, 80_000, "call", seed=3)
+    mc, se, *_ = quant.monte_carlo_price(100, 100, 0.04, 0.25, 63, 80_000, "call", seed=3)
     assert abs(mc - call["price"]) < 3 * se
 
 
 def test_mc_put_within_three_se_of_bs(put):
-    mc, se, *_ = quant.monte_carlo_price(100, 100, 0.04, 0.25, 63, 63, 80_000, "put", seed=3)
+    mc, se, *_ = quant.monte_carlo_price(100, 100, 0.04, 0.25, 63, 80_000, "put", seed=3)
     assert abs(mc - put["price"]) < 3 * se
+
+
+def test_mc_terminal_sampling_is_lognormal():
+    _, _, finals, payoffs = quant.monte_carlo_price(100, 100, 0.04, 0.25, 63, 200_000, "call", seed=5)
+    assert finals.shape == payoffs.shape == (200_000,)
+    assert abs(finals.mean() - 100 * np.exp(0.04 * 63 / 252)) < 0.2
 
 
 # ------------------------------------------------------------

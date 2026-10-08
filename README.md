@@ -93,12 +93,14 @@ file.
 - **GBM (Geometric Brownian Motion)** — geometric Brownian motion path
   simulator.
 - **MC (Monte Carlo)** — risk-neutral Monte Carlo pricer benchmarked against
-  the closed form.
+  the closed form. Terminal prices are sampled exactly in one step, so cost
+  is O(paths).
 - **HB (Hedge Backtest)** — historical delta-hedge backtest: short an option
   on a real price window (2008 crisis, COVID crash, SVB (Silicon Valley Bank)
-  2023, …) and compare hedging under a static vol assumption vs rolling-window
-  vs GARCH(1,1) forecasts, including transaction costs and rebalancing
-  frequency.
+  2023, …) and compare hedging under a static vol (the trailing vol known on
+  the start date) vs rolling-window vs GARCH(1,1) forecasts, including
+  transaction costs and rebalancing frequency. Forecasts warm up on up to a
+  year of history before the start date (at least 63 sessions required).
 
 **Terminal UX (User Experience)**
 
@@ -206,7 +208,11 @@ Three details that are in the code, not the theme toggle.
 **Look-ahead.** Rolling realized vol and GARCH(1,1) (Generalized Autoregressive
 Conditional Heteroskedasticity) are causal. At step *t* the forecast uses only
 prices `≤ t`. GARCH is refit on a trailing window, never the whole sample. A
-“GARCH hedge” that peeks at future returns is not a forecast.
+“GARCH hedge” that peeks at future returns is not a forecast. In the
+backtest, both forecasts are warmed up on history *before* the start date,
+and the static σ is the trailing vol known on that date, so no strategy
+sees a price from later in the window. `test_backtest_no_lookahead` shocks
+late-window prices and checks that earlier hedge vols do not move.
 
 **Vega units.** `bs_price_delta_greeks` returns vega as ∂Price / ∂(1 vol
 point), i.e. per 1%. Newton–Raphson implied vol needs ∂Price / ∂σ, so the

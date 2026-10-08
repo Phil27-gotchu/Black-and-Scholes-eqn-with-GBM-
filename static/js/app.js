@@ -1097,7 +1097,7 @@ function pageMC(token) {
     <div class="panel"><div class="body form-row">
       ${f("mc-s0", "SPOT S0", 100)} ${f("mc-k", "STRIKE K", 100)}
       ${f("mc-r", "RATE r", 0.04)} ${f("mc-sig", "VOL σ", 0.25)}
-      ${f("mc-t", "EXPIRY (DAYS)", 63, 1)} ${f("mc-steps", "STEPS", 63, 1)}
+      ${f("mc-t", "EXPIRY (DAYS)", 63, 1)}
       ${f("mc-n", "PATHS", 20000, 1000)}
       <div class="field"><label>TYPE</label>
         <select id="mc-type"><option value="call">CALL</option><option value="put">PUT</option></select></div>
@@ -1113,7 +1113,7 @@ function pageMC(token) {
     const token2 = state.renderToken;
     const qs = new URLSearchParams({
       S0: $("#mc-s0").value, K: $("#mc-k").value, r: $("#mc-r").value,
-      sigma: $("#mc-sig").value, T_days: $("#mc-t").value, n_steps: $("#mc-steps").value,
+      sigma: $("#mc-sig").value, T_days: $("#mc-t").value,
       n_paths: $("#mc-n").value, opt_type: $("#mc-type").value, seed: 42,
     });
     $("#mc-c1").innerHTML = `<div class="loading">SIMULATING…</div>`;

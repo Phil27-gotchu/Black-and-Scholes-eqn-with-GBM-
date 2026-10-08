@@ -176,16 +176,16 @@ Simulates geometric Brownian motion paths. Inputs: `S0`, drift `μ`, `σ`, horiz
 
 ### 5.9 Monte Carlo (`MC`)
 
-Risk-neutral MC option price vs Black–Scholes closed form; returns 95% CI half-width and histograms of finals/payoffs.
+Risk-neutral MC option price vs Black–Scholes closed form; returns 95% CI half-width and histograms of finals/payoffs. A European payoff only depends on S_T, and under GBM S_T is exactly lognormal, so terminal prices are sampled in one step: O(paths) time and memory, no path matrix.
 
 ### 5.10 Hedge backtest (`HB`)
 
-1. Load historical closes for `ticker` from `start` for `window_days` sessions.
+1. Load historical closes for `ticker`: `window_days` sessions from `start`, plus up to 252 sessions of **lookback** before it (minimum 63, otherwise HTTP 400).
 2. Short one European option (strike = `k_mult × S0`).
-3. Delta-hedge along the path under three σ series:
-   - **Static** — realized vol of the whole window (constant).
-   - **Rolling** — 21d realized (causal), warm-up filled with static.
-   - **GARCH** — causal GARCH(1,1), warm-up filled with static.
+3. Delta-hedge along the path under three σ series, all causal:
+   - **Static** — trailing realized vol over the lookback, i.e. the vol known at inception (constant).
+   - **Rolling** — 21d realized, computed on lookback + window and sliced to the window.
+   - **GARCH** — GARCH(1,1) fit on a trailing window that sits inside the lookback, so every day of the window has a real forecast.
 4. Cash earns/pays interest: `cash *= exp(r·dt)` each step; transaction costs on trades.
 5. Compare hedged P&L (final cash) vs unhedged (`premium − payout`).
 
@@ -227,7 +227,7 @@ Base URL: `http://127.0.0.1:8000`. All market endpoints use uppercase tickers.
 |--------|------|-----------------|---------|
 | GET | `/api/ov` | `S,K,T_days,r,sigma,opt_type` | `greeks`, `spots`, `curves` |
 | GET | `/api/gbm` | `S0,mu,sigma,T_days,n_paths,seed` | `paths`, `mean_path`, `stats` |
-| GET | `/api/mc` | `S0,K,r,sigma,T_days,n_steps,n_paths,opt_type,seed` | `mc_price`, `ci95`, `bs_price`, `diff`, samples |
+| GET | `/api/mc` | `S0,K,r,sigma,T_days,n_paths,opt_type,seed` | `mc_price`, `ci95`, `bs_price`, `diff`, samples |
 | GET | `/api/backtest` | `ticker,start,window_days,k_mult,r,tc,rebalance,opt_type` | prices, dates, three `strategies` with P&L |
 
 ### Chart ranges (`RANGE_MAP`)
@@ -280,7 +280,7 @@ No UI imports. Safe to unit-test offline.
 | Function | Role |
 |----------|------|
 | `simulate_gbm_paths` | `S0,μ,σ,T_days,n_steps,n_paths,seed` → path matrix |
-| `monte_carlo_price` | Risk-neutral MC price, stderr, finals, payoffs |
+| `monte_carlo_price` | `S0,K,r,σ,T_days,n_paths,option_type,seed` → price, stderr, finals, payoffs (exact terminal sampling) |
 
 ---
 
@@ -297,7 +297,9 @@ No UI imports. Safe to unit-test offline.
 | `DEFAULT_WATCHLISTS` | Seed lists if file missing |
 | `US_EXCHANGES` / `IN_EXCHANGES` | Filters for Yahoo Search |
 | `OPTION_UNDERLYING` | Maps indices → optionable ETF/symbol |
-| TTL caches | Quotes ~90s, history ~3 min, profiles ~1 h (via `@ttl_cache`) |
+| TTL caches | Quotes ~90s, history ~3 min, profiles ~1 h (via `@ttl_cache`; expired entries purged, 256 entries max per function) |
+| `parallel_map` | Runs blocking Yahoo calls on a thread pool (news sources, IV term-structure chains), keeping input order |
+| `YAHOO_SEARCH_TIMEOUT` | 3 s cap on Yahoo Search; one search per query serves both NASDAQ and BSE |
 
 ### Watchlists & search
 

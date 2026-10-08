@@ -144,7 +144,7 @@ def test_gbm_clamps_paths_and_is_seeded(client):
 def test_mc_converges_to_black_scholes(client):
     r = client.get("/api/mc", params={
         "S0": 100, "K": 100, "r": 0.04, "sigma": 0.25, "T_days": 63,
-        "n_steps": 63, "n_paths": 40000, "opt_type": "call", "seed": 2,
+        "n_paths": 40000, "opt_type": "call", "seed": 2,
     })
     assert r.status_code == 200
     body = r.json()
@@ -218,8 +218,18 @@ def test_backtest_400_future_window(client, monkeypatch):
     assert r.status_code == 400
 
 
-def test_backtest_synthetic_path(client, monkeypatch):
+def test_backtest_400_without_lookback(client, monkeypatch):
     monkeypatch.setattr(terminal.md, "get_history", lambda *a, **k: _ohlc(n=120))
+    r = client.get("/api/backtest", params={
+        "ticker": "JPM", "start": "2023-03-01", "window_days": 63,
+    })
+    assert r.status_code == 400
+    assert "before" in r.json()["detail"]
+
+
+def test_backtest_synthetic_path(client, monkeypatch):
+    monkeypatch.setattr(terminal.md, "get_history",
+                        lambda *a, **k: _ohlc(n=400, start="2022-01-03"))
     r = client.get("/api/backtest", params={
         "ticker": "jpm", "start": "2023-03-01", "window_days": 63,
         "opt_type": "call",
@@ -229,6 +239,39 @@ def test_backtest_synthetic_path(client, monkeypatch):
     assert body["ticker"] == "JPM"
     assert set(body["strategies"]) == {"static", "rolling", "garch"}
     assert len(body["dates"]) == len(body["prices"]) == 63
+    assert body["dates"][0].startswith("2023-03-01")
+    assert body["lookback_days"] == 252
+
+
+def test_backtest_forecasts_cover_whole_window(client, monkeypatch):
+    """Warm-up comes from pre-start history, so no day falls back to static σ."""
+    monkeypatch.setattr(terminal.md, "get_history",
+                        lambda *a, **k: _ohlc(n=400, start="2022-01-03"))
+    body = client.get("/api/backtest", params={
+        "ticker": "JPM", "start": "2023-03-01", "window_days": 63,
+    }).json()
+    static = body["strategies"]["static"]["sigma_series"][0]
+    for key in ("rolling", "garch"):
+        series = body["strategies"][key]["sigma_series"]
+        assert sum(abs(s - static) < 1e-9 for s in series) == 0, key
+
+
+def test_backtest_no_lookahead(client, monkeypatch):
+    """Shocking prices late in the window must not change earlier hedge vols."""
+    base = _ohlc(n=400, start="2022-01-03")
+    shocked = base.copy()
+    cut = base.index.get_loc(pd.Timestamp("2023-03-01")) + 30
+    shocked.iloc[cut:, shocked.columns.get_loc("Close")] *= np.exp(
+        np.random.default_rng(9).normal(0, 0.08, len(shocked) - cut).cumsum())
+    params = {"ticker": "JPM", "start": "2023-03-01", "window_days": 63}
+
+    monkeypatch.setattr(terminal.md, "get_history", lambda *a, **k: base)
+    a = client.get("/api/backtest", params=params).json()["strategies"]
+    monkeypatch.setattr(terminal.md, "get_history", lambda *a, **k: shocked)
+    b = client.get("/api/backtest", params=params).json()["strategies"]
+
+    for key in ("static", "rolling", "garch"):
+        assert a[key]["sigma_series"][:30] == b[key]["sigma_series"][:30], key
 
 
 def test_markets_uses_quotes_mock(client, monkeypatch):

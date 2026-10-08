@@ -305,7 +305,11 @@ def api_iv(ticker: str, expiry: str | None = None, r: float = 0.04, garch: bool 
     cal_days = max(int((exp_dt - today).days), 1)
     T = cal_days / 365.25
 
-    chain = md.get_option_chain(t, expiry)
+    term_expiries = expiries[:8]
+    fetch = [expiry] + [e for e in term_expiries if e != expiry]
+    chains = dict(zip(fetch, md.parallel_map(lambda e: md.get_option_chain(t, e), fetch)))
+
+    chain = chains[expiry]
     calls = _invert_chain_side(chain.get("calls") or [], spot, T, r, "call")
     puts = _invert_chain_side(chain.get("puts") or [], spot, T, r, "put")
     atm_k, atm_iv = _atm_iv(calls, puts, spot)
@@ -320,14 +324,14 @@ def api_iv(ticker: str, expiry: str | None = None, r: float = 0.04, garch: bool 
     otm.sort(key=lambda x: x["strike"])
 
     term = []
-    for exp in expiries[:8]:
+    for exp in term_expiries:
         if exp == expiry:
             term.append({"expiry": exp, "atm_iv": atm_iv, "T_days": cal_days})
             continue
         exp_i = pd.Timestamp(exp).normalize()
         days_i = max(int((exp_i - today).days), 1)
         T_i = days_i / 365.25
-        ch_i = md.get_option_chain(t, exp)
+        ch_i = chains[exp]
         c_i = _invert_chain_side(ch_i.get("calls") or [], spot, T_i, r, "call")
         p_i = _invert_chain_side(ch_i.get("puts") or [], spot, T_i, r, "put")
         _, iv_i = _atm_iv(c_i, p_i, spot)
@@ -431,11 +435,10 @@ def api_gbm(S0: float, mu: float, sigma: float, T_days: int,
 
 @app.get("/api/mc")
 def api_mc(S0: float, K: float, r: float, sigma: float, T_days: int,
-           n_steps: int = 63, n_paths: int = 10000,
-           opt_type: str = "call", seed: int = 42):
+           n_paths: int = 10000, opt_type: str = "call", seed: int = 42):
     n_paths = min(n_paths, 200_000)
-    price, stderr, _, finals, payoffs = quant.monte_carlo_price(
-        S0, K, r, sigma, T_days, n_steps, n_paths, opt_type, seed)
+    price, stderr, finals, payoffs = quant.monte_carlo_price(
+        S0, K, r, sigma, T_days, n_paths, opt_type, seed)
     bs = quant.bs_price_delta_greeks(S0, K, T_days / 252, r, sigma, opt_type)
     return {
         "mc_price": float(price),
@@ -445,6 +448,10 @@ def api_mc(S0: float, K: float, r: float, sigma: float, T_days: int,
         "final_prices": jlist(finals[:20000]),
         "payoffs": jlist(payoffs[:20000]),
     }
+
+
+BT_LOOKBACK = 252
+BT_MIN_LOOKBACK = 63
 
 
 @app.get("/api/backtest")
@@ -462,31 +469,39 @@ def api_backtest(ticker: str, start: str, window_days: int = 63,
         start_ts = pd.to_datetime(start)
     except Exception:
         raise HTTPException(400, f"Bad start date '{start}'")
-    sub = df.loc[idx >= start_ts].iloc[:window_days]
-    if len(sub) < window_days:
-        raise HTTPException(400, f"Only {len(sub)} sessions for {t} from {start} "
+    i0 = int(np.searchsorted(idx.values, np.datetime64(start_ts), side="left"))
+    if len(df) - i0 < window_days:
+        raise HTTPException(400, f"Only {max(len(df) - i0, 0)} sessions for {t} from {start} "
                                  f"(need {window_days})")
+    if i0 < BT_MIN_LOOKBACK:
+        raise HTTPException(400, f"Only {i0} sessions of {t} history before {start} "
+                                 f"(need {BT_MIN_LOOKBACK} to warm up the vol forecasts)")
 
-    prices = sub["Close"].values.astype(float)
-    sub_idx = sub.index.tz_localize(None) if sub.index.tz is not None else sub.index
+    # Forecasts run on [lookback | window] and are sliced to the window, so every
+    # sigma used inside the window is built from prices at or before that day.
+    lookback = min(i0, BT_LOOKBACK)
+    full = df["Close"].values.astype(float)[i0 - lookback:i0 + window_days]
+    prices = full[lookback:]
+    sub_idx = idx[i0:i0 + window_days]
     dates = [ts.isoformat() for ts in sub_idx.to_pydatetime()]
 
     S0 = float(prices[0])
     K = round(S0 * k_mult, 2)
     T_total = window_days / 252
     n_steps = window_days - 1
-    static_sigma = float(np.diff(np.log(prices)).std() * np.sqrt(252))
+    static_sigma = float(np.diff(np.log(full[:lookback + 1])).std(ddof=1) * np.sqrt(252))
+    realized_sigma = float(np.diff(np.log(prices)).std(ddof=1) * np.sqrt(252))
 
     roll_fc = quant.clean_sigma_series(
-        quant.rolling_vol_forecast(prices, window=21), static_sigma)
+        quant.rolling_vol_forecast(full, window=21)[lookback:], static_sigma)
     garch_fc = quant.clean_sigma_series(
-        quant.garch_vol_forecast(prices, window=min(126, window_days - 5)),
+        quant.garch_vol_forecast(full, window=min(252, lookback - 1))[lookback:],
         static_sigma)
     static_series = np.full(len(prices), static_sigma)
 
     strategies = {}
     for key, label, sigma_series in [
-        ("static", "STATIC σ (NAIVE)", static_series),
+        ("static", "STATIC σ (VOL KNOWN AT START)", static_series),
         ("rolling", "ROLLING-WINDOW FORECAST", roll_fc),
         ("garch", "GARCH(1,1) FORECAST", garch_fc),
     ]:
@@ -507,7 +522,8 @@ def api_backtest(ticker: str, start: str, window_days: int = 63,
         "prices": jlist(prices),
         "start_price": S0,
         "strike": K,
-        "realized_vol": static_sigma,
+        "realized_vol": realized_sigma,
+        "lookback_days": lookback,
         "strategies": strategies,
     }
 

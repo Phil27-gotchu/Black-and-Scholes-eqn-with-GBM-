@@ -10,6 +10,7 @@ import json
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -21,7 +22,8 @@ import yfinance as yf
 # TTL cache (thread-safe, per-function)
 # ------------------------------------------------------------
 
-def ttl_cache(ttl_seconds: int):
+def ttl_cache(ttl_seconds: int, maxsize: int = 256):
+    """Expired entries are purged on insert; beyond `maxsize` the oldest go first."""
     def deco(fn):
         cache, lock = {}, threading.Lock()
 
@@ -35,11 +37,27 @@ def ttl_cache(ttl_seconds: int):
                     return hit[1]
             val = fn(*args, **kwargs)
             with lock:
+                cache.pop(key, None)
                 cache[key] = (now + ttl_seconds, val)
+                if len(cache) > maxsize:
+                    for k in [k for k, (exp, _) in cache.items() if exp <= now]:
+                        del cache[k]
+                    while len(cache) > maxsize:
+                        del cache[next(iter(cache))]
             return val
 
+        wrapper.cache = cache
         return wrapper
     return deco
+
+
+def parallel_map(fn, items, max_workers: int = 8) -> list:
+    """Run blocking Yahoo calls concurrently; results keep input order."""
+    items = list(items)
+    if len(items) <= 1:
+        return [fn(x) for x in items]
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(items))) as pool:
+        return list(pool.map(fn, items))
 
 
 # ------------------------------------------------------------
@@ -395,6 +413,21 @@ def _filter_search_quotes(quotes: list, section: str) -> list:
     return out
 
 
+YAHOO_SEARCH_TIMEOUT = 3
+
+
+@ttl_cache(60)
+def _yahoo_search_quotes(query: str) -> list:
+    """One Yahoo Search per query, shared by both sections."""
+    try:
+        from yfinance import Search
+        result = Search(query, max_results=12, news_count=0,
+                        timeout=YAHOO_SEARCH_TIMEOUT, raise_errors=False)
+        return list(result.quotes or [])
+    except Exception:
+        return []
+
+
 @ttl_cache(60)
 def search_symbols(query: str, section: str = "nasdaq", limit: int = 8) -> list:
     """Autocomplete: local catalog plus Yahoo Finance search by name or ticker."""
@@ -404,12 +437,7 @@ def search_symbols(query: str, section: str = "nasdaq", limit: int = 8) -> list:
     local = _local_symbol_search(q, section, limit=limit)
     remote = []
     if len(q) >= 2:
-        try:
-            from yfinance import Search
-            result = Search(q, max_results=12, news_count=0, raise_errors=False)
-            remote = _filter_search_quotes(result.quotes or [], section)
-        except Exception:
-            remote = []
+        remote = _filter_search_quotes(_yahoo_search_quotes(q.lower()), section)
     merged, seen = [], set()
     for row in local + remote:
         if row["ticker"] in seen:
@@ -604,8 +632,8 @@ def get_news_feed(scope: str = "all", query: str = "", ticker: str = "",
 
     bundled, seen = [], set()
     per = 8 if scope == "name" else 6
-    for src in sources:
-        for item in get_news(src, limit=per):
+    for batch in parallel_map(lambda s: get_news(s, limit=per), sources):
+        for item in batch:
             key = (item.get("title") or "").strip().lower()
             if not key or key in seen:
                 continue
